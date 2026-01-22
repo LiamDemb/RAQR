@@ -39,6 +39,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+# poetry.lock
 
 # Java
 target/
@@ -47,3 +48,8 @@ target/
 *.pid
 *.seed
 *.pid.lock
+
+# Data & Models
+/data/
+models/
+results/
