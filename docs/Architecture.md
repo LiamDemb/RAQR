@@ -19,8 +19,6 @@ graph LR
     S1[Dense RAG]
     S2[Graph RAG]
     S3[Temporal RAG]
-    S4[Table RAG]
-    S5[Hierarchical RAG]
     end
     
     Strategy --> Generator[LLM Generator]
@@ -82,7 +80,6 @@ This approach keeps the project easy to run for assessors while remaining flexib
 ### Data & Retrieval
 *   **Vector Store:** `FAISS` (CPU version suffices for this scale)
 *   **Graph Engine:** `NetworkX` (in-memory) for lightweight GraphRAG implementation.
-*   **Table Engine:** `Pandas` + `SQLAlchemy` (SQLite) for Table RAG.
 *   **Embeddings:** `HuggingFace Embeddings` (Model: `all-MiniLM-L6-v2` for speed/standardisation).
 
 ### Machine Learning & Routers
@@ -116,18 +113,16 @@ Responsible for ingesting datasets and normalizing them into a standard schema.
       "question_id": "uuid",
       "question": "Who was...",
       "gold_answer": "Expected string",
-      "gold_strategy": "Dense_RAG" // Populated by Oracle
+      "gold_strategy": "Dense_RAG" // Populated by Oracle (Dense_RAG | Graph_RAG | Temporal_RAG)
     }
     ```
 
 ### B. The Retrieval Strategies (`src/strategies`)
-Each strategy class inherits from `BaseStrategy`.
+Each strategy class inherits from `BaseStrategy`. There are **3** concrete implementations.
 
 1.  **`DenseStrategy`:** Standard LangChain `VectorStoreRetriever`.
 2.  **`GraphStrategy`:** Entity extraction (via LLM) $\rightarrow$ `NetworkX` neighbor lookup.
 3.  **`TemporalStrategy`:** Date extraction (Regex/LLM) $\rightarrow$ Vector Search with Metadata Filter (`year=...`).
-4.  **`TableStrategy`:** LLM text-to-SQL or Pandas query generation on structured dataframes.
-5.  **`HierarchicalStrategy`:** Retrieval over a pre-computed summary index (parents) pointing to raw chunks (children).
 
 ### C. The Probe Module (`src/probe`)
 Runs *before* the router. It executes a low-latency search (Dense RAG top-k=10).
@@ -154,7 +149,7 @@ Runs *before* the router. It executes a low-latency search (Dense RAG top-k=10).
 *   **Inputs:**
     *   Tokens (Text) $\rightarrow$ Transformer Layers $\rightarrow$ `[CLS]` embedding.
     *   Signals (Floats) $\rightarrow$ Normalized $\rightarrow$ Concatenated with `[CLS]`.
-    *   Output $\rightarrow$ Linear Layer $\rightarrow$ Softmax (5 classes).
+    *   Output $\rightarrow$ Linear Layer $\rightarrow$ Softmax (3 classes).
 
 #### 3. LLM Router (`llm_router.py`)
 *   **Logic:** Jinja2 prompt template populated with Question + Probe Stats.
@@ -166,14 +161,14 @@ The codebase is organized to run in **4 sequential stages**:
 
 ### Stage 1: Ingestion (Data Prep)
 *   **Script:** `python scripts/01_ingest_data.py`
-*   **Action:** Downloads raw datasets, chunks text, builds FAISS index, builds Graph/Table structures.
+*   **Action:** Downloads raw datasets, chunks text, builds FAISS index, builds Graph structures.
 *   **Artifacts:** `data/processed/vector_index.faiss`, `data/processed/graph.pkl`.
 
 ### Stage 2: Oracle Label Generation (The "Ground Truth")
 *   **Script:** `python scripts/02_run_oracle.py`
 *   **Action:**
     1.  Loops through the Benchmark Dataset.
-    2.  Runs **ALL 5** strategies for every question.
+    2.  Runs **ALL 3** strategies for every question.
     3.  Evaluates answers using `F1 Score` vs Gold Answer.
     4.  Selects the winner (handling tie-breaking logic).
 *   **Artifacts:** `data/training/labeled_dataset.jsonl` (This is your training data).

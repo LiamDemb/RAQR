@@ -24,13 +24,11 @@ We frame the research as a controlled experiment using a "Gold Label" (Oracle) m
 4.  **Training:** We train various routers to predict this label using different input signals.
 
 ### The Retrieval Strategies (The Choices)
-To ensure broad coverage of reasoning types, the system routes between five distinct behaviours, each utilising a different knowledge representation:
+To ensure broad coverage of reasoning types, the system routes between three distinct behaviours, each utilising a different knowledge representation:
 
 1.  **Dense RAG:** The baseline vector-chunk retrieval; optimal for specific, local factual lookups.
-2.  **Hierarchical RAG:** Tree-structured summarisation (e.g., RAPTOR) for high-level global synthesis.
-3.  **GraphRAG:** Entity-relationship traversal for complex, multi-hop reasoning across documents.
-4.  **Temporal RAG:** Time-indexed retrieval for chronological, trend-based, or "as-of" queries.
-5.  **Table RAG:** Structured schema extraction for aggregation, sorting, and statistical queries.
+2.  **GraphRAG:** Entity-relationship traversal for complex, multi-hop reasoning across documents.
+3.  **Temporal RAG:** Time-indexed retrieval for chronological, trend-based, or "as-of" queries.
 
 ## 4. The Variables (What We Are Testing)
 
@@ -57,7 +55,7 @@ We are conducting a two-dimensional ablation study:
 ## 6. Technical Scope
 *   **Language:** Python.
 *   **Core Libraries:** PyTorch, Hugging Face Transformers (for the lightweight router), LangChain/LangGraph (orchestration).
-*   **Data Stores:** FAISS (Vector), Neo4j/NetworkX (Graph), SQL/Pandas (Table).
+*   **Data Stores:** FAISS (Vector), Neo4j/NetworkX (Graph).
 *   **Evaluation:** Exact Match (EM), F1 Score, and Routing Accuracy.
 
 ## 7. Expected Contribution

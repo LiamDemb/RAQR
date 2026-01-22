@@ -17,12 +17,9 @@ The Heuristic Router is implemented as a **Priority Cascade**. It evaluates rule
 | Priority | Check Type | Condition (Pseudocode) | Route To | Rationale |
 | :--- | :--- | :--- | :--- | :--- |
 | **1** | Regex | `matches(query, r"(from or between or in) \d{4}")` OR `contains(query, "timeline", "history of")` | **Temporal RAG** | Explicit date constraints. |
-| **2** | Regex | `contains(query, "summary", "overview", "themes", "synopsis")` | **Hierarchical RAG** | Global synthesis intent. |
-| **3** | Regex | `contains(query, "table", "list of", "average", "count", "top \d+")` | **Table RAG** | Aggregation/Structure intent. |
-| **4** | Regex | `contains(query, "connection between", "relationship", "how does X affect Y")` | **Graph RAG** | Multi-hop reasoning intent. |
-| **5** | Signal | `Probe.skewness < 0.5` AND `Probe.max_score > 0.65` | **Graph RAG** | "Flat" distribution implies multiple relevant entities (multi-hop). |
-| **6** | Signal | `Probe.max_score < 0.4` (Low Confidence) | **Hierarchical RAG** | Dense retrieval failed to find a match; try high-level summary. |
-| **7** | Fallback | `True` | **Dense RAG** | Standard factual lookup. |
+| **2** | Regex | `contains(query, "connection between", "relationship", "how does X affect Y")` | **Graph RAG** | Multi-hop reasoning intent. |
+| **3** | Signal | `Probe.skewness < 0.5` AND `Probe.max_score > 0.65` | **Graph RAG** | "Flat" distribution implies multiple relevant entities (multi-hop). |
+| **4** | Fallback | `True` | **Dense RAG** | Standard factual lookup. |
 
 *Note: Thresholds (0.5, 0.65, 0.4) are initial hyperparameters. These will be tuned on the Dev Set.*
 
@@ -43,7 +40,7 @@ The Lightweight Classifier must process two distinct data modalities: **Text** (
     *   Result: Combined Vector (Dimension: 773).
 4.  **Classification Head:**
     *   Layer 1: Linear (773 -> 256) + ReLU + Dropout(0.2).
-    *   Layer 2: Linear (256 -> 5) (5 Classes).
+    *   Layer 2: Linear (256 -> 3) (3 Classes).
     *   Output: Softmax probability distribution.
 
 ## 3. Feedback Signal Definitions
@@ -67,14 +64,7 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
     2.  **Storage:** Store relations in a NetworkX graph (in-memory) or simple adjacency list JSON.
     3.  **Retrieval:** Extract entities from Query $\rightarrow$ Find nodes in Graph $\rightarrow$ Retrieve 1-hop neighbors $\rightarrow$ Return text chunks associated with those neighbors.
 
-### B. TableRAG (Simplified)
-*   **Representation:** A set of `pandas.DataFrame` objects created from specific datasets (e.g., MEQA financial tables).
-*   **Implementation:**
-    1.  **Retrieval:** The LLM is given the table schema (column names).
-    2.  **Generation:** The LLM generates a Pandas query code snippet (e.g., `df[df['year'] > 2020].mean()`).
-    3.  **Execution:** Execute code safely and return the result string.
-
-### C. TemporalRAG (Metadata Filter)
+### B. TemporalRAG (Metadata Filter)
 *   **Ingestion:** Run a regex date extractor over the corpus. Save `year` into the vector store metadata.
 *   **Retrieval:**
     1.  Extract year range from query (e.g., "2019-2021").
@@ -88,20 +78,18 @@ When generating training data, we must decide which strategy is "Correct."
 **The Solution: Simplicity Bias with Margin**
 We define a **Simplicity Hierarchy** (Cheapest to Most Expensive). We only upgrade to a more expensive strategy if the performance gain exceeds a **Margin Threshold ($\delta = 0.05$)**.
 
-### Hierarchy (Ranked 0 to 4)
+### Hierarchy (Ranked 0 to 2)
 0.  **Dense RAG** (Baseline)
 1.  **Temporal RAG** (Filter is cheap)
-2.  **Table RAG** (Code exec is fast)
-3.  **Graph RAG** (Multiple lookups)
-4.  **Hierarchical RAG** (Long context processing)
+2.  **Graph RAG** (Most expensive/complex)
 
 ### Selection Algorithm
 ```python
 def select_gold_label(results: Dict[str, float]) -> str:
     # results = {'Dense': 0.80, 'Graph': 0.84, ...}
     
-    # 1. Sort strategies by Simplicity Rank (0 to 4)
-    sorted_strategies = ['Dense', 'Temporal', 'Table', 'Graph', 'Hierarchical']
+    # 1. Sort strategies by Simplicity Rank (0 to 2)
+    sorted_strategies = ['Dense', 'Temporal', 'Graph']
     
     best_strategy = 'Dense'
     best_score = results['Dense']

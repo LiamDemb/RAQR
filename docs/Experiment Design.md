@@ -5,34 +5,31 @@
 **Method:** "Gold Label" (Oracle) supervision. We generate ground-truth labels by running all strategies on a mixed benchmark and selecting the winner, then train/test routers to predict that winner.
 
 ## 2. The Dataset (Benchmark)
-To ensure the system encounters diverse reasoning requirements, we construct a unified evaluation dataset merging samples from four sources:
+To ensure the system encounters diverse reasoning requirements, we construct a unified evaluation dataset merging samples from three sources:
 *   **Natural Questions (NQ):** Factual/Lookup queries (Target: Dense RAG).
 *   **ComplexTempQA:** Temporal/Chronological queries (Target: Temporal RAG).
 *   **WikiWhy:** Causal/Explanation queries (Target: GraphRAG).
-*   **MEQA/Custom:** Event-centric and Aggregation queries (Target: Table/Hierarchical RAG).
 
-*Total Target Size: ~1,000–2,000 balanced samples.*
+*Total Target Size: ~750–1,500 balanced samples.*
 
 ## 3. The Retrieval Strategies (Class Labels)
-The system routes queries to one of five distinct retrieval pipelines. These act as the classification targets.
+The system routes queries to one of three distinct retrieval pipelines. These act as the classification targets.
 
 1.  **Dense RAG:** (Baseline) Vector search (`all-MiniLM-L6-v2`) + Chunk retrieval.
-2.  **Hierarchical RAG:** Recursive summarisation tree (RAPTOR-style) for global context.
-3.  **GraphRAG:** Entity-relation traversal (NetworkX/Neo4j) for multi-hop reasoning.
-4.  **Temporal RAG:** Metadata-filtered retrieval for time-bound queries.
-5.  **Table RAG:** Schema-guided extraction for aggregation/SQL-like queries.
+2.  **GraphRAG:** Entity-relation traversal (NetworkX/Neo4j) for multi-hop reasoning.
+3.  **Temporal RAG:** Metadata-filtered retrieval for time-bound queries.
 
 ### Label Generation Logic (The Oracle)
-To generate training data, every question is processed by all 5 strategies. The "Gold Label" is determined by:
+To generate training data, every question is processed by all 3 strategies. The "Gold Label" is determined by:
 1.  **Highest Performance:** The strategy with the highest Answer F1 Score.
-2.  **Tie-Breaking:** If scores are identical, the "Simpler/Cheaper" strategy wins (Order of preference: Dense > Table > Temporal > Graph > Hierarchical).
+2.  **Tie-Breaking:** If scores are identical, the "Simpler/Cheaper" strategy wins (Order of preference: Dense > Temporal > Graph).
 
 ## 4. The Input Signals (Features)
 The routers consume two categories of data:
 
 ### A. Question Features (Static)
 *   **Raw Text:** The user's query string.
-*   **Keywords:** Presence of trigger terms (e.g., "when", "summarise", "average") via Regex.
+*   **Keywords:** Presence of trigger terms (e.g., "when", "relationship", "cause") via Regex.
 *   **Embeddings:** A 384-dimensional vector representation of the query.
 
 ### B. Retrieval Feedback (Dynamic/Probe)
@@ -54,6 +51,7 @@ We evaluate three distinct software architectures:
 *   **Mechanism:** Supervised classification.
     *   *Text Input:* Tokens passed through Transformer layers.
     *   *Signal Input:* Numerical features concatenated to the classification head (MLP).
+    *   *Head:* Layer 2: Linear (256 -> 3) (3 Classes).
 *   **Goal:** To achieve maximum accuracy with minimum latency/cost.
 
 ### Type 3: LLM Router (Upper Bound)
