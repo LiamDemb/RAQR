@@ -60,6 +60,19 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
 ### A. GraphRAG (Simplified)
 *   **Representation:** We will not create a massive Neo4j instance.
 *   **Implementation:**
+    *   **Graph Schema (explicit):**
+        *   **Nodes:** `Entity` nodes (from spaCy; optional GLiNER) and `Chunk` nodes (document chunk IDs).
+        *   **Edges (minimum):** `Entity -> Chunk` membership if an entity occurs in that chunk.
+        *   **Edges (optional):** `Entity <-> Entity` co-occurrence within the same chunk (or within a small window).
+        *   **Retrieval:** extract entities from query → find matching `Entity` nodes → retrieve connected `Chunk` nodes (and optionally 1-hop expansion).
+    *   **Entity Normalization Policy (to reduce surface-form mismatch):**
+        *   Lowercase
+        *   Strip punctuation / normalize whitespace
+        *   Optional lightweight alias table for common entities (e.g., `{"us": "united states", "u.s.": "united states", "uk": "united kingdom"}`)
+        *   Apply the *same* normalization to entities extracted from chunks and from queries.
+    *   **Diagnostic to log:** entity match rate on the benchmark:
+        *   “% of queries with \(\ge 1\) entity match in the graph” (after normalization).
+        *   This helps distinguish “GraphRAG failed due to aliasing/matching” from “Graph reasoning not needed”.
     1.  **Ingestion:** Use `spaCy` to extract entities (ORG, PERSON, GPE) from chunks.
     2.  **Storage:** Store relations in a NetworkX graph (in-memory) or simple adjacency list JSON.
     3.  **Retrieval:** Extract entities from Query $\rightarrow$ Find nodes in Graph $\rightarrow$ Retrieve 1-hop neighbors $\rightarrow$ Return text chunks associated with those neighbors.
@@ -68,7 +81,10 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
 *   **Ingestion:** Run a regex date extractor over the corpus. Save `year` into the vector store metadata.
 *   **Retrieval:**
     1.  Extract year range from query (e.g., "2019-2021").
-    2.  Apply `filter={"year": {"$gte": 2019, "$lte": 2021}}` to the FAISS/Chroma search.
+    2.  **Implementation note (FAISS):** Raw FAISS does not natively support metadata filters. We implement filtering explicitly:
+        *   Retrieve a deeper candidate set (e.g., top \(N\) where \(N \gg k\)).
+        *   Filter candidates by `year` in metadata.
+        *   If fewer than \(k\) contexts remain, keep pulling from deeper ranks until \(k\) contexts are filled (or candidates are exhausted).
 
 ## 5. The "Oracle" Labeling Logic
 When generating training data, we must decide which strategy is "Correct."
@@ -76,7 +92,7 @@ When generating training data, we must decide which strategy is "Correct."
 **The Problem:** Dense RAG might get F1 score 0.82, and Graph RAG might get 0.83. Is Graph actually better? Probably not worth the extra compute.
 
 **The Solution: Simplicity Bias with Margin**
-We define a **Simplicity Hierarchy** (Cheapest to Most Expensive). We only upgrade to a more expensive strategy if the performance gain exceeds a **Margin Threshold ($\delta = 0.05$)**.
+We use a **margin-based simplicity bias** oracle: only choose a more complex strategy if it beats simpler alternatives by at least a margin \(\delta\). This reduces label noise from tiny score differences and trains routers toward the deployment goal: **don’t spend complexity for tiny gains**.
 
 ### Hierarchy (Ranked 0 to 2)
 0.  **Dense RAG** (Baseline)
@@ -87,22 +103,48 @@ We define a **Simplicity Hierarchy** (Cheapest to Most Expensive). We only upgra
 ```python
 def select_gold_label(results: Dict[str, float]) -> str:
     # results = {'Dense': 0.80, 'Graph': 0.84, ...}
-    
-    # 1. Sort strategies by Simplicity Rank (0 to 2)
-    sorted_strategies = ['Dense', 'Temporal', 'Graph']
-    
-    best_strategy = 'Dense'
-    best_score = results['Dense']
-    
-    # 2. Iterate up the hierarchy
-    for strategy in sorted_strategies[1:]:
-        current_score = results[strategy]
-        
-        # 3. Only switch if improvement > Margin (0.05)
-        if current_score > (best_score + 0.05):
-            best_strategy = strategy
-            best_score = current_score
-            
-    return best_strategy
+
+    delta = 0.05  # Calibrated on Dev (ablated over {0.00, 0.02, 0.05, 0.10})
+    eps = 1e-6
+
+    s_dense = results['Dense']
+    s_temp = results['Temporal']
+    s_graph = results['Graph']
+
+    # 1) Determine best by raw score (ties handled deterministically below)
+    best_score = max(s_dense, s_temp, s_graph)
+    tied = []
+    if abs(s_dense - best_score) <= eps:
+        tied.append('Dense')
+    if abs(s_temp - best_score) <= eps:
+        tied.append('Temporal')
+    if abs(s_graph - best_score) <= eps:
+        tied.append('Graph')
+
+    # Deterministic tie-break: Dense > Temporal > Graph
+    for name in ['Dense', 'Temporal', 'Graph']:
+        if name in tied:
+            best = name
+            break
+
+    # 2) Margin-based "upgrade" rule
+    if best == 'Dense':
+        return 'Dense'
+
+    if best == 'Temporal':
+        return 'Temporal' if (s_temp >= s_dense + delta) else 'Dense'
+
+    # best == 'Graph'
+    # Require Graph to beat Dense by delta, and (optionally but clean) Temporal by delta.
+    if (s_graph >= s_dense + delta) and (s_graph >= s_temp + delta):
+        return 'Graph'
+
+    # Fall back to the simplest strategy within delta of Graph
+    # (i.e., doesn't lose much compared to Graph)
+    if s_dense >= s_graph - delta:
+        return 'Dense'
+    if s_temp >= s_graph - delta:
+        return 'Temporal'
+    return 'Graph'
 ```
 *This ensures our router is trained to be efficient, not just accuracy-obsessed.*

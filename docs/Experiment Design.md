@@ -20,9 +20,42 @@ The system routes queries to one of three distinct retrieval pipelines. These ac
 3.  **Temporal RAG:** Metadata-filtered retrieval for time-bound queries.
 
 ### Label Generation Logic (The Oracle)
-To generate training data, every question is processed by all 3 strategies. The "Gold Label" is determined by:
-1.  **Highest Performance:** The strategy with the highest Answer F1 Score.
-2.  **Tie-Breaking:** If scores are identical, the "Simpler/Cheaper" strategy wins (Order of preference: Dense > Temporal > Graph).
+To generate training data, every question is processed by all 3 strategies. The Oracle produces a single "Gold Label" using a **margin-based simplicity bias** rule.
+
+#### Definitions
+Let:
+
+- \(S_{dense}\), \(S_{temp}\), \(S_{graph}\) be the evaluation score (e.g., token-F1 in \([0, 1]\)) for each strategy on that question.
+- Complexity order: **Dense (simplest)** < **Temporal** < **Graph (most complex)**.
+- A margin threshold \(\delta \ge 0\).
+- A small tolerance \(\varepsilon\) for floating comparisons (e.g., \(10^{-6}\)).
+
+#### Oracle selection rule (margin-based simplicity bias)
+1.  **Compute the best-scoring strategy:** \(\text{best} = \arg\max S_*\).
+2.  **Decide whether to “pay for complexity”:**
+    - If \(\text{best} = \textbf{Dense}\): choose **Dense**.
+    - If \(\text{best} = \textbf{Temporal}\): choose **Temporal** only if \(S_{temp} \ge S_{dense} + \delta\); otherwise choose **Dense**.
+    - If \(\text{best} = \textbf{Graph}\): choose **Graph** only if \(S_{graph} \ge S_{dense} + \delta\) and (optionally, but used here for cleanliness) \(S_{graph} \ge S_{temp} + \delta\); otherwise fall back to the simplest strategy whose score is within \(\delta\) of \(S_{graph}\).
+3.  **Deterministic tie-break (exact ties / within tolerance):**
+    - If multiple strategies are effectively tied (within \(\varepsilon\)), break ties deterministically: **Dense > Temporal > Graph**.
+
+This produces labels that encode the deployment goal: **do not spend complexity for tiny gains**.
+
+#### Choosing \(\delta\) (calibrated, not guessed)
+We select \(\delta\) empirically on the **Dev** set:
+
+- Compute \(\Delta = S_{best} - S_{second\_best}\) for each Dev example (using raw scores).
+- Inspect the distribution of \(\Delta\), and set \(\delta\) to a stable, defensible value (e.g., the 10th–20th percentile of \(\Delta\)).
+- Report an ablation over \(\delta \in \{0.00, 0.02, 0.05, 0.10\}\), including:
+  - Label distribution shift as \(\delta\) changes
+  - Router routing accuracy and downstream F1
+  - Latency trade-offs (secondary objective)
+
+#### Split usage policy (to avoid leakage)
+- Use **Train** to fit router parameters.
+- Use **Dev** for: selecting \(\delta\), early stopping, and model selection.
+- Generate raw per-strategy scores for Train+Dev once; choose \(\delta\) on Dev only; then apply that fixed \(\delta\) to label Train+Dev.
+- Keep **Test** untouched until the Phase 5 ablation runs.
 
 ## 4. The Input Signals (Features)
 The routers consume two categories of data:
@@ -72,3 +105,51 @@ We perform a 3x3 ablation study. Each cell represents a distinct experiment scri
 1.  **Routing Accuracy:** % of times the router picked the "Gold Label" strategy.
 2.  **Downstream Performance:** F1 Score / Exact Match of the final answer produced by the routed strategy.
 3.  **Efficiency:** Inference latency (ms) and cost per 1k queries.
+4.  **Routing Macro Metrics:** Macro-F1 (or balanced accuracy) and per-class precision/recall for routing (ensures Graph/Temporal performance is visible under label imbalance).
+5.  **Optional Utility Score:** A simple cost-aware summary, e.g. \(U = \text{DownstreamF1} - \lambda \cdot \text{end\_to\_end\_latency\_ms}\) (or cost), reported alongside raw metrics.
+6.  **Graph Diagnostic (Match Rate):** “% of queries with \(\ge 1\) entity match in the graph” (after entity normalization). This is not a primary metric, but it helps interpret when GraphRAG underperforms due to surface-form mismatch rather than reasoning.
+
+## 8. Reproducibility & Measurement Protocols
+These are experimental controls required to make ablation results credible and reproducible.
+
+### A. Experiment Tracking (Required Fields)
+Each experiment run must log:
+
+- **Config identity:** config file path/name (and/or a stable hash of the config contents)
+- **Code identity:** git commit hash
+- **Dataset identity:** dataset version tag (and/or hash of `benchmark.jsonl` / `corpus.jsonl`)
+- **Randomness controls:** global random seed(s) used (Python/NumPy/PyTorch, plus any retrieval-specific seeding)
+- **Run metadata:** timestamp, run ID, machine/CPU/GPU (optional but helpful)
+
+### B. LLM Router Determinism
+For the LLM router experiments:
+
+- Fix **model name/version** (provider + model identifier)
+- Set **`temperature = 0`** (and log other sampling params)
+- Log the **prompt template version** and either:
+  - the rendered prompts, or
+  - a prompt hash + the exact inputs used (question + probe stats)
+- Log the **parser version** (regex / extraction logic), since parser changes can change labels/routes
+
+### D. Oracle Fairness Control (Labels depend on generation)
+Oracle labels are determined by answer quality (F1/EM), so they are a function of **retrieval + generation**. To ensure fairness across strategies during Oracle labeling:
+
+- Use the **same generator model** (provider + model identifier) for all strategies.
+- Use the **same base prompt template** for all strategies (only the retrieved contexts differ).
+- Record `model_id`, `prompt_hash`, and `sampling params` (e.g., temperature/top_p) in logs and cache keys.
+
+### C. Latency & Cost Protocol (What “latency” means)
+Latency must be logged as a breakdown and as a total:
+
+- **probe_latency_ms**
+- **router_latency_ms**
+- **strategy_retrieval_latency_ms**
+- **strategy_generation_latency_ms**
+- **end_to_end_latency_ms = probe + router + retrieval + generation**
+
+Measurement rules:
+
+- **Probe usage per condition:** For **Q-only** router variants, the probe should be disabled (`run_probe = false`) so they are not unfairly penalized. In that case, log `probe_latency_ms = 0` and keep `end_to_end_latency_ms` consistent with actual executed components. For **F-only** and **Combined** variants, set `run_probe = true`.
+- Specify **warm vs cold** runs (recommended: warm runs for steady-state; separately report cold-start if relevant).
+- Use **multiple repeats** per condition and report **median** (and IQR) to reduce noise.
+- For LLM calls, record token usage and compute a normalized **cost per 1k queries** if applicable.

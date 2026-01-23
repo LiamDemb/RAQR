@@ -11,7 +11,7 @@ This is the Python package. All reusable logic lives here.
     *   `heuristic.py`: Regex and rule-based logic.
     *   `classifier.py`: The DistilBERT model definition and training logic.
     *   `llm.py`: Prompt templates for the LLM router.
-*   **`strategies/`**: The 5 implementations of retrieval (Dense, Graph, Temporal, Table, Hierarchical). Each must adhere to a common interface.
+*   **`strategies/`**: The 3 implementations of retrieval (Dense, Graph, Temporal). Each must adhere to a common interface and return a structured result (e.g., `StrategyResult`: `answer`, `contexts`, `scores`, `latency_ms`) for consistent evaluation and error analysis.
 
 ## 2. Experimentation & Execution
 *   **`configs/`**: YAML files for configuration (e.g., `ablation_v1.yaml`). Used to switch between model types and input signals without changing code.
