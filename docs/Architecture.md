@@ -105,22 +105,60 @@ This approach keeps the project easy to run for assessors while remaining flexib
 ### A. The Data Pipeline (`src/data`)
 Responsible for ingesting datasets and normalizing them into a standard schema.
 
-*   **Input Formats:** NQ (JSONL), ComplexTempQA (JSON), WikiWhy (CSV).
-*   **Unified Schema (`corpus.jsonl`):**
+*   **Input Formats:** NQ (JSONL), ComplexTempQA (JSON/JSONL), WikiWhy (JSONL/CSV).
+*   **Unified Corpus Schema (`corpus.jsonl`) (chunk-level):**
+    *   The authoritative definition is in `docs/Corpus Creation Strategy.md`.
+    *   `corpus.jsonl` is a **chunk inventory** shared by all strategies (Dense/Temporal/Graph).
     ```json
     {
-      "id": "uuid",
-      "text": "Full document text...",
-      "metadata": {"date": "2023-01-01", "source": "wiki", "title": "..."}
+      "chunk_id": "uuid",
+      "doc_id": "uuid",
+      "source": "wikipedia|nq|wikiwhy|complextempqa",
+      "title": "string|null",
+      "url": "string|null",
+      "text": "string",
+      "section_path": ["Lead", "Early life", "Career"],
+      "char_span_in_doc": [1234, 1876],
+      "metadata": {
+        "dataset_origin": "nq|wikiwhy|complextempqa|wiki",
+        "page_id": "string|null",
+        "revision_id": "string|null",
+        "years": [1998, 2001],
+        "year_min": 1998,
+        "year_max": 2001,
+        "temporal_density": 0.014,
+        "entities": [
+          {"surface": "United States", "norm": "united states", "type": "GPE", "qid": "Q30"}
+        ],
+        "anchors": {
+          "outgoing_titles": ["France", "2012 Summer Olympics"],
+          "incoming_stub": []
+        }
+      }
     }
     ```
-*   **Evaluation Schema (`benchmark.jsonl`):**
+*   **Evaluation Schema (`benchmark.jsonl`) (Phase 1 output):**
     ```json
     {
       "question_id": "uuid",
       "question": "Who was...",
-      "gold_answer": "Expected string",
-      "gold_strategy": "Dense_RAG" // Populated by Oracle (Dense_RAG | Graph_RAG | Temporal_RAG)
+      "gold_answers": ["Expected string 1", "Expected string 2"],
+      "dataset_source": "nq|complextempqa|wikiwhy",
+      "split": "train|dev|test"
+    }
+    ```
+
+    > Note: `benchmark.jsonl` intentionally does **not** include `gold_strategy` in Phase 1; strategy labels are added only by the Oracle in Phase 3.
+
+*   **Oracle-Labeled Schema (`labeled_{train,dev}.jsonl`) (Phase 3 output):**
+    ```json
+    {
+      "question_id": "uuid",
+      "question": "Who was...",
+      "gold_answers": ["Expected string 1", "Expected string 2"],
+      "dataset_source": "nq|complextempqa|wikiwhy",
+      "split": "train|dev",
+      "gold_strategy": "Dense_RAG|Temporal_RAG|Graph_RAG" // Populated by Oracle
     }
     ```
 
@@ -168,8 +206,8 @@ The codebase is organized to run in **4 sequential stages**:
 
 ### Stage 1: Ingestion (Data Prep)
 *   **Script:** `python scripts/01_ingest_data.py`
-*   **Action:** Downloads raw datasets, chunks text, builds FAISS index, builds Graph structures.
-*   **Artifacts:** `data/processed/vector_index.faiss`, `data/processed/graph.pkl`.
+*   **Action:** Builds the unified chunked corpus (plus enrichment) and then produces retrieval artifacts (FAISS + metadata table + NetworkX graph), per `docs/Corpus Creation Strategy.md`.
+*   **Artifacts:** `data/processed/corpus.jsonl`, `data/processed/vector_index.faiss`, `data/processed/vector_meta.parquet`, `data/processed/graph.pkl` (and optional docstore).
 
 ### Stage 2: Oracle Label Generation (The "Ground Truth")
 *   **Script:** `python scripts/02_run_oracle.py`
@@ -178,11 +216,11 @@ The codebase is organized to run in **4 sequential stages**:
     2.  Runs **ALL 3** strategies for every question.
     3.  Evaluates answers using `F1 Score` vs Gold Answer.
     4.  Selects the winner using a **margin-based simplicity bias** rule (\(\delta\)) with deterministic tie-break: **Dense > Temporal > Graph**.
-*   **Artifacts:** `data/training/labeled_dataset.jsonl` (This is your training data).
+*   **Artifacts:** `data/training/labeled_train.jsonl`, `data/training/labeled_dev.jsonl` (This is your training data).
 
 ### Stage 3: Training (Classifier Only)
 *   **Script:** `python scripts/03_train_router.py`
-*   **Action:** Loads `labeled_dataset.jsonl`. Fine-tunes the DistilBERT model.
+*   **Action:** Loads `labeled_train.jsonl` / `labeled_dev.jsonl`. Fine-tunes the DistilBERT model.
 *   **Artifacts:** `models/classifier_router.pt`.
 
 ### Stage 4: Evaluation (The Ablation Run)
