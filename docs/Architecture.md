@@ -5,6 +5,13 @@ The system is designed as a **modular pipeline** rather than an autonomous agent
 
 The architecture follows a strict **Interface-Based Design**: all Retrieval Strategies must implement a common `retrieve_and_generate` interface, and all Routers must implement a common `predict_route` interface.
 
+For rigorous evaluation, strategies do **not** return only a string. They return a small structured object (e.g., `StrategyResult`) containing:
+
+- `answer: str`
+- `contexts: list[DocumentChunk]` (or IDs/references)
+- `scores: list[float]` (aligned with `contexts`)
+- `latency_ms: dict` (at minimum: `retrieval`, `generation`, `total`)
+
 ### System Diagram (Conceptual)
 ```mermaid
 graph LR
@@ -121,8 +128,8 @@ Responsible for ingesting datasets and normalizing them into a standard schema.
 Each strategy class inherits from `BaseStrategy`. There are **3** concrete implementations.
 
 1.  **`DenseStrategy`:** Standard LangChain `VectorStoreRetriever`.
-2.  **`GraphStrategy`:** Entity extraction (via LLM) $\rightarrow$ `NetworkX` neighbor lookup.
-3.  **`TemporalStrategy`:** Date extraction (Regex/LLM) $\rightarrow$ Vector Search with Metadata Filter (`year=...`).
+2.  **`GraphStrategy`:** Entity extraction (spaCy; optionally GLiNER) $\rightarrow$ `NetworkX` neighbor lookup.
+3.  **`TemporalStrategy`:** Date extraction (Regex/LLM) $\rightarrow$ FAISS vector search + explicit post-filter by `year` metadata (refill from deeper ranks until \(k\) contexts).
 
 ### C. The Probe Module (`src/probe`)
 Runs *before* the router. It executes a low-latency search (Dense RAG top-k=10).
@@ -151,7 +158,7 @@ Runs *before* the router. It executes a low-latency search (Dense RAG top-k=10).
     *   Signals (Floats) $\rightarrow$ Normalized $\rightarrow$ Concatenated with `[CLS]`.
     *   Output $\rightarrow$ Linear Layer $\rightarrow$ Softmax (3 classes).
 
-#### 3. LLM Router (`llm_router.py`)
+#### 3. LLM Router (`llm.py`)
 *   **Logic:** Jinja2 prompt template populated with Question + Probe Stats.
 *   **Output Parser:** Regex to extract strategy name from LLM response.
 
@@ -170,7 +177,7 @@ The codebase is organized to run in **4 sequential stages**:
     1.  Loops through the Benchmark Dataset.
     2.  Runs **ALL 3** strategies for every question.
     3.  Evaluates answers using `F1 Score` vs Gold Answer.
-    4.  Selects the winner (handling tie-breaking logic).
+    4.  Selects the winner using a **margin-based simplicity bias** rule (\(\delta\)) with deterministic tie-break: **Dense > Temporal > Graph**.
 *   **Artifacts:** `data/training/labeled_dataset.jsonl` (This is your training data).
 
 ### Stage 3: Training (Classifier Only)
