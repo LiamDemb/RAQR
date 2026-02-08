@@ -72,6 +72,27 @@ def test_build_graph_nodes():
     assert "E:united states" in graph.nodes
 
 
+def test_build_graph_relations():
+    chunks = [
+        {
+            "chunk_id": "c1",
+            "metadata": {
+                "entities": [{"norm": "steve jobs", "type": "PERSON"}],
+                "relations": [
+                    {
+                        "subj_norm": "steve jobs",
+                        "pred": "founded",
+                        "obj_norm": "apple",
+                    }
+                ],
+            },
+        }
+    ]
+    graph = build_graph(chunks)
+    assert graph.has_edge("E:steve jobs", "E:apple")
+    assert graph.edges["E:steve jobs", "E:apple"]["label"] == "founded"
+
+
 def test_docstore_cache(tmp_path):
     path = tmp_path / "docstore.sqlite"
     store = DocStore(path.as_posix())

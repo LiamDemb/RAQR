@@ -19,6 +19,7 @@ from raqr.data.corpus_acquisition import Budgets, ingest_complextempqa, ingest_n
 from raqr.data.corpus_schemas import CorpusChunk
 from raqr.data.docstore import DocStore
 from raqr.data.enrich_entities import extract_entities_spacy, load_spacy
+from raqr.data.enrich_relations import extract_relations_rebel, load_rebel
 from raqr.data.enrich_years import aggregate_year_fields, extract_years
 from raqr.data.entity_lexicon import build_entity_lexicon
 from raqr.data.quality_gates import run_quality_gates
@@ -148,6 +149,25 @@ def main() -> int:
         default=os.getenv("DOCSTORE_PATH", "data/processed/docstore.sqlite"),
     )
     parser.add_argument("--model-name", default=os.getenv("MODEL_NAME", "all-MiniLM-L6-v2"))
+    parser.add_argument(
+        "--re-model-name",
+        default=os.getenv("RE_MODEL_NAME", "Babelscape/rebel-large"),
+    )
+    parser.add_argument(
+        "--re-batch-size",
+        type=int,
+        default=int(os.getenv("RE_BATCH_SIZE", "4")),
+    )
+    parser.add_argument(
+        "--re-max-input-chars",
+        type=int,
+        default=int(os.getenv("RE_MAX_INPUT_CHARS", "2000")),
+    )
+    parser.add_argument(
+        "--re-max-new-tokens",
+        type=int,
+        default=int(os.getenv("RE_MAX_NEW_TOKENS", "128")),
+    )
     parser.add_argument("--max-pages", type=int, default=int(os.getenv("MAX_PAGES", "12")))
     parser.add_argument("--max-hops", type=int, default=int(os.getenv("MAX_HOPS", "2")))
     parser.add_argument(
@@ -208,7 +228,9 @@ def main() -> int:
         titles=[doc.title for doc in all_docs.values() if doc.title],
         wiki=wiki,
     )
+    rebel_tokenizer, rebel_model, rebel_device = load_rebel(args.re_model_name)
     chunks: List[dict] = []
+    chunk_texts: List[str] = []
 
     for doc in all_docs.values():
         if not doc.html:
@@ -250,7 +272,22 @@ def main() -> int:
                 char_span_in_doc=piece.char_span_in_doc,
                 metadata=metadata,
             )
-            chunks.append(chunk.to_json())
+            chunk_json = chunk.to_json()
+            chunks.append(chunk_json)
+            chunk_texts.append(piece.text)
+
+    relations_by_chunk = extract_relations_rebel(
+        chunk_texts,
+        rebel_tokenizer,
+        rebel_model,
+        rebel_device,
+        alias_map=alias_map,
+        batch_size=args.re_batch_size,
+        max_input_chars=args.re_max_input_chars,
+        max_new_tokens=args.re_max_new_tokens,
+    )
+    for idx, rels in enumerate(relations_by_chunk):
+        chunks[idx].setdefault("metadata", {})["relations"] = rels
 
     output_dir = Path(args.output_dir)
     corpus_path = output_dir / "corpus.jsonl"

@@ -40,11 +40,22 @@ def temporal_gate(chunks: List[dict]) -> Dict[str, float]:
 
 def graph_gate(chunks: List[dict]) -> Dict[str, float]:
     ent_counts = []
+    rel_counts = []
+    with_rel = 0
     for chunk in chunks:
         ents = chunk.get("metadata", {}).get("entities", []) or []
         ent_counts.append(len(ents))
+        rels = chunk.get("metadata", {}).get("relations", []) or []
+        rel_counts.append(len(rels))
+        if rels:
+            with_rel += 1
     avg_ents = sum(ent_counts) / max(len(ent_counts), 1)
-    return {"avg_entities_per_chunk": avg_ents}
+    avg_rels = sum(rel_counts) / max(len(rel_counts), 1)
+    return {
+        "avg_entities_per_chunk": avg_ents,
+        "avg_relations_per_chunk": avg_rels,
+        "chunks_with_relation_rate": with_rel / max(len(chunks), 1),
+    }
 
 
 def run_quality_gates(

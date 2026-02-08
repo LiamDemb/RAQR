@@ -5,8 +5,8 @@ from typing import Iterable, List
 import networkx as nx
 
 
-def build_graph(chunks: Iterable[dict], max_pairs: int = 50) -> nx.Graph:
-    G = nx.Graph()
+def build_graph(chunks: Iterable[dict]) -> nx.DiGraph:
+    G = nx.DiGraph()
     for chunk in chunks:
         chunk_id = chunk.get("chunk_id")
         if not chunk_id:
@@ -15,23 +15,24 @@ def build_graph(chunks: Iterable[dict], max_pairs: int = 50) -> nx.Graph:
         G.add_node(cnode, kind="chunk")
 
         entities = chunk.get("metadata", {}).get("entities", [])
-        norms = []
         for ent in entities:
             norm = ent.get("norm")
             if not norm:
                 continue
             enode = f"E:{norm}"
             G.add_node(enode, kind="entity", type=ent.get("type"))
-            G.add_edge(enode, cnode, kind="mentions")
-            norms.append(norm)
+            G.add_edge(enode, cnode, kind="appears_in")
 
-        pairs = 0
-        for i in range(len(norms)):
-            for j in range(i + 1, len(norms)):
-                if pairs >= max_pairs:
-                    break
-                G.add_edge(f"E:{norms[i]}", f"E:{norms[j]}", kind="cooccur")
-                pairs += 1
-            if pairs >= max_pairs:
-                break
+        relations = chunk.get("metadata", {}).get("relations", []) or []
+        for rel in relations:
+            subj = rel.get("subj_norm") or rel.get("subject_norm")
+            obj = rel.get("obj_norm") or rel.get("object_norm")
+            pred = rel.get("pred") or rel.get("predicate")
+            if not subj or not obj or not pred:
+                continue
+            snode = f"E:{subj}"
+            onode = f"E:{obj}"
+            G.add_node(snode, kind="entity")
+            G.add_node(onode, kind="entity")
+            G.add_edge(snode, onode, kind="rel", label=pred)
     return G
