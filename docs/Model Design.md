@@ -61,10 +61,12 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
 *   **Representation:** We will not create a massive Neo4j instance.
 *   **Implementation:**
     *   **Graph Schema (explicit):**
-        *   **Nodes:** `Entity` nodes (from spaCy; optional GLiNER) and `Chunk` nodes (document chunk IDs).
-        *   **Edges (minimum):** `Entity -> Chunk` membership if an entity occurs in that chunk.
-        *   **Edges (optional):** `Entity <-> Entity` co-occurrence within the same chunk (or within a small window).
-        *   **Retrieval:** extract entities from query → find matching `Entity` nodes → retrieve connected `Chunk` nodes (and optionally 1-hop expansion).
+        *   **Nodes:** `Entity` nodes and `Chunk` nodes (document chunk IDs).
+        *   **Edges (primary):** Directed semantic relations from extracted triples: `Entity --predicate--> Entity`.
+        *   **Edges (provenance):** `Entity --> Chunk` (`appears_in`) to provide evidence text for relations.
+        *   **Retrieval:** extract entities from query → map to graph entity nodes → traverse 1-hop relational edges → resolve to chunks via provenance edges.
+    *   **Relation Extraction Policy:**
+        *   Run a lightweight RE model (e.g., `REBEL` or a GLiNER-relation model) over chunk text to extract `(subject, predicate, object)` triples.
     *   **Entity Normalization Policy (to reduce surface-form mismatch):**
         *   Lowercase
         *   Strip punctuation / normalize whitespace
@@ -73,9 +75,9 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
     *   **Diagnostic to log:** entity match rate on the benchmark:
         *   “% of queries with \(\ge 1\) entity match in the graph” (after normalization).
         *   This helps distinguish “GraphRAG failed due to aliasing/matching” from “Graph reasoning not needed”.
-    1.  **Ingestion:** Use `spaCy` to extract entities (ORG, PERSON, GPE) from chunks.
-    2.  **Storage:** Store relations in a NetworkX graph (in-memory) or simple adjacency list JSON.
-    3.  **Retrieval:** Extract entities from Query $\rightarrow$ Find nodes in Graph $\rightarrow$ Retrieve 1-hop neighbors $\rightarrow$ Return text chunks associated with those neighbors.
+    1.  **Ingestion:** Extract entities + semantic triples \((subject, predicate, object)\) from chunk text using a lightweight Relation Extraction model (e.g., `REBEL` or a GLiNER-relation model).
+    2.  **Storage:** Store a NetworkX **DiGraph** with directed `Entity --predicate--> Entity` semantic edges and `Entity --> Chunk` provenance edges.
+    3.  **Retrieval:** Extract entities from query $\rightarrow$ map to entity nodes $\rightarrow$ traverse outgoing relational edges (1-hop) $\rightarrow$ collect evidence chunks via provenance edges.
 
 ### B. TemporalRAG (Metadata Filter)
 *   **Ingestion:** Run a regex date extractor over the corpus. Save `year` into the vector store metadata.

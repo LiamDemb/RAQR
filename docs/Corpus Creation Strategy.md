@@ -35,7 +35,7 @@
 1. `data/processed/corpus.jsonl` — unified chunked corpus (schema below).
 2. `data/processed/docstore.sqlite` (or LMDB) — page-level cache + chunk metadata (for dedupe and reproducibility).
 3. `data/processed/vector_index.faiss` + `data/processed/vector_meta.parquet` — embeddings + metadata mapping (FAISS has no native metadata filtering, so store metadata externally).  
-4. `data/processed/graph.pkl` — NetworkX graph (Entity↔Chunk edges, optional Entity↔Entity).  
+4. `data/processed/graph.pkl` — NetworkX graph (Entity-Relation-Entity edges + Entity-Chunk provenance edges).  
 5. `data/processed/entity_lexicon.parquet` — canonical entity strings, aliases, and optional QIDs (used for normalization).
 
 These artifacts align with the modular “offline prep vs online routing & inference” separation. 
@@ -71,6 +71,10 @@ Each line is one **chunk**, not one document.
       {"surface": "Barack Obama", "norm": "barack obama", "type": "PERSON", "qid": "Q76"}
     ],
 
+    "relations": [
+      {"subj_norm": "barack obama", "pred": "born_in", "obj_norm": "united states"}
+    ],
+
     "anchors": {
       "outgoing_titles": ["List of ...", "France", "2012 Summer Olympics"],
       "incoming_stub": []
@@ -83,6 +87,7 @@ Each line is one **chunk**, not one document.
 
 * `years/year_min/year_max` enable Temporal RAG filtering.
 * `entities[].norm` is the GraphRAG join key (string-canonical), with optional `qid` when resolvable.
+* `relations[]` enables relation-aware 1-hop expansion: `Entity --predicate--> Entity`, with evidence resolved via `Entity -> Chunk` provenance edges.
 * `anchors.outgoing_titles` is lightweight “connective tissue” to support multi-hop traversal without requiring a full hyperlink graph.
 
 
@@ -118,6 +123,7 @@ Run **the same enrichment** on all docs:
 
 * Regex date extraction → `years` metadata
 * Entity extraction + normalization policy → `entities` metadata
+* Relation extraction (semantic triples) → `relations` metadata (and graph edges)
 
 ### Stage E — Chunking & Serialization
 
@@ -126,7 +132,7 @@ Chunk to 500–1000 tokens with overlap; write `corpus.jsonl`.
 ### Stage F — Indexing
 
 * Embed chunks → build FAISS
-* Build NetworkX graph from chunk entities
+* Build NetworkX graph from extracted relations (triples) + provenance edges
 
 ### Stage G — Quality Gates (Required)
 
@@ -371,16 +377,27 @@ def extract_years(text, max_range_expand=15):
 **Why this matters:** Temporal RAG relies on metadata filtering; without robust year signals, it degenerates into Dense RAG with extra steps. 
 
 
-### 5.2 Entity Normalization Policy (GraphRAG Join-Key Reliability)
+### 5.2 Entity & Relation Extraction Policy (GraphRAG Join-Key Reliability)
 
 **Goal:** GraphRAG success depends on matching query entities to corpus entities. Surface-form mismatch (“U.S.” vs “United States”) can collapse GraphRAG’s recall; we must normalize entities consistently across all sources. 
 
-#### 5.2.1 Extraction
+#### 5.2.1 Extraction (Entities)
 
 * Run spaCy NER over **chunk text** (and later over queries at retrieval time).
 * Keep entity types: `PERSON`, `ORG`, `GPE`, `LOC`, `WORK_OF_ART`, `EVENT` (configurable).
 
-#### 5.2.2 Normalization (deterministic)
+#### 5.2.2 Relation Extraction (Semantic Triples)
+
+**Goal:** Replace shallow “co-mentions” with explicit directed relations to support multi-hop reasoning.
+
+* Run a lightweight Relation Extraction (RE) model over each chunk to extract triples \((subject, predicate, object)\).
+* Normalize `subject` and `object` using the same entity normalization policy (below).
+* Store triples in chunk metadata as `relations` (for auditability) and use them to build directed semantic edges in the graph.
+* Example models:
+  * `Babelscape/rebel-large` (transformers-based RE)
+  * GLiNER relation models (spaCy pipeline integration, if preferred)
+
+#### 5.2.3 Normalization (deterministic)
 
 Apply the same function everywhere:
 
@@ -397,7 +414,7 @@ Apply the same function everywhere:
 
 * If a chunk originates from a resolved Wikipedia page with a known QID, tag that page-title entity with `qid` and propagate.
 
-#### 5.2.3 Entity Lexicon Build
+#### 5.2.4 Entity Lexicon Build
 
 Create `entity_lexicon.parquet`:
 
@@ -406,7 +423,7 @@ Create `entity_lexicon.parquet`:
 * `qid_candidates` (if any)
 * `df` document frequency (for downweighting extremely common entities)
 
-#### 5.2.4 Entity Policy Pseudocode
+#### 5.2.5 Entity Policy Pseudocode
 
 ```python
 def norm_entity(s, alias_map):
@@ -496,14 +513,14 @@ Graph schema (minimum viable):
   * `C:{chunk_id}` (Chunk nodes)
 * Edges:
 
-  * `E -> C` if entity occurs in chunk (weight = frequency or TF-style)
-  * Optional: `E <-> E` co-occurrence in same chunk (bounded; helps 1-hop expansion)
+  * **Semantic edges (primary):** `E --predicate--> E` from extracted triples \((subject, predicate, object)\)
+  * **Provenance edges:** `E --> C` (`appears_in`) if entity occurs in chunk (optionally weighted by frequency)
 
 **Build pseudocode**
 
 ```python
 def build_graph(chunks):
-    G = nx.Graph()
+    G = nx.DiGraph()
     for ch in chunks:
         cnode = f"C:{ch.chunk_id}"
         G.add_node(cnode, kind="chunk")
@@ -511,12 +528,16 @@ def build_graph(chunks):
         for ent in ch.metadata["entities"]:
             enode = f"E:{ent['norm']}"
             G.add_node(enode, kind="entity", type=ent["type"])
-            G.add_edge(enode, cnode, kind="mentions")
+            G.add_edge(enode, cnode, kind="appears_in")
 
-        # optional co-occur
-        norms = [e["norm"] for e in ch.metadata["entities"]]
-        for a, b in bounded_pairs(norms, max_pairs=50):
-            G.add_edge(f"E:{a}", f"E:{b}", kind="cooccur")
+        # semantic triples (subject, predicate, object)
+        for rel in ch.metadata.get("relations", []):
+            s = rel["subj_norm"]
+            p = rel["pred"]
+            o = rel["obj_norm"]
+            G.add_node(f"E:{s}", kind="entity")
+            G.add_node(f"E:{o}", kind="entity")
+            G.add_edge(f"E:{s}", f"E:{o}", kind="rel", label=p)
     return G
 ```
 

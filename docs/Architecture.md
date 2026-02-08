@@ -80,18 +80,19 @@ poetry run python -m <project_module>
 
 * Configuration is handled using simple configuration files (e.g., YAML or TOML) stored in the repository.
 * Environment-specific or sensitive values (e.g., API keys) may be provided via a `.env` file loaded at runtime.
-* A template file (`.env.example`) is included to document required variables.
+* A `.env` file may be used locally to document required variables.
 
 This approach keeps the project easy to run for assessors while remaining flexible for experimentation and testing.
 
 ### Data & Retrieval
 *   **Vector Store:** `FAISS` (CPU version suffices for this scale)
-*   **Graph Engine:** `NetworkX` (in-memory) for lightweight GraphRAG implementation.
+*   **Graph Engine:** `NetworkX` (in-memory) for relation-aware GraphRAG (triple traversal + provenance).
 *   **Embeddings:** `HuggingFace Embeddings` (Model: `all-MiniLM-L6-v2` for speed/standardisation).
 
 ### Machine Learning & Routers
 *   **Deep Learning Framework:** `PyTorch` (v2.0+).
 *   **Transformer Library:** `Hugging Face Transformers` (for loading/fine-tuning DistilBERT).
+*   **Relation Extraction:** `transformers` (e.g., REBEL) and/or `gliner` (relation models) for extracting semantic triples during ingestion.
 *   **Classical ML:** `Scikit-Learn` (for metrics, skewness calc, SVM baselines if needed).
 
 ### LLM Interface
@@ -130,6 +131,9 @@ Responsible for ingesting datasets and normalizing them into a standard schema.
         "entities": [
           {"surface": "United States", "norm": "united states", "type": "GPE", "qid": "Q30"}
         ],
+        "relations": [
+          {"subj_norm": "barack obama", "pred": "born_in", "obj_norm": "united states"}
+        ],
         "anchors": {
           "outgoing_titles": ["France", "2012 Summer Olympics"],
           "incoming_stub": []
@@ -166,7 +170,7 @@ Responsible for ingesting datasets and normalizing them into a standard schema.
 Each strategy class inherits from `BaseStrategy`. There are **3** concrete implementations.
 
 1.  **`DenseStrategy`:** Standard LangChain `VectorStoreRetriever`.
-2.  **`GraphStrategy`:** Entity extraction (spaCy; optionally GLiNER) $\rightarrow$ `NetworkX` neighbor lookup.
+2.  **`GraphStrategy`:** Entity & relation extraction $\rightarrow$ `NetworkX` triple traversal (1-hop) $\rightarrow$ resolve to evidence chunks via provenance edges.
 3.  **`TemporalStrategy`:** Date extraction (Regex/LLM) $\rightarrow$ FAISS vector search + explicit post-filter by `year` metadata (refill from deeper ranks until \(k\) contexts).
 
 ### C. The Probe Module (`src/probe`)
@@ -196,7 +200,12 @@ Runs *before* the router. It executes a low-latency search (Dense RAG top-k=10).
     *   Signals (Floats) $\rightarrow$ Normalized $\rightarrow$ Concatenated with `[CLS]`.
     *   Output $\rightarrow$ Linear Layer $\rightarrow$ Softmax (3 classes).
 
-#### 3. LLM Router (`llm.py`)
+#### 3. Keyword Router (`keyword.py`) (C-Q-KW baseline)
+*   **Architecture:** Shallow supervised classifier (e.g., Logistic Regression / small MLP).
+*   **Inputs:** Keyword/regex feature vector only (no embeddings), e.g. `has_when`, `has_digit`, `starts_with_why`.
+*   **Output:** Softmax (3 classes).
+
+#### 4. LLM Router (`llm.py`)
 *   **Logic:** Jinja2 prompt template populated with Question + Probe Stats.
 *   **Output Parser:** Regex to extract strategy name from LLM response.
 
@@ -205,8 +214,8 @@ Runs *before* the router. It executes a low-latency search (Dense RAG top-k=10).
 The codebase is organized to run in **4 sequential stages**:
 
 ### Stage 1: Ingestion (Data Prep)
-*   **Script:** `python scripts/01_ingest_data.py`
-*   **Action:** Builds the unified chunked corpus (plus enrichment) and then produces retrieval artifacts (FAISS + metadata table + NetworkX graph), per `docs/Corpus Creation Strategy.md`.
+*   **Scripts:** `python scripts/01_ingest_data.py` and `python scripts/01_build_corpus.py`
+*   **Action:** Build the benchmark (splits) first, then build the unified chunked corpus (plus enrichment) and retrieval artifacts (FAISS + metadata table + NetworkX graph), per `docs/Corpus Creation Strategy.md`.
 *   **Artifacts:** `data/processed/corpus.jsonl`, `data/processed/vector_index.faiss`, `data/processed/vector_meta.parquet`, `data/processed/graph.pkl` (and optional docstore).
 
 ### Stage 2: Oracle Label Generation (The "Ground Truth")

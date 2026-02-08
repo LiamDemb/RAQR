@@ -16,7 +16,7 @@ To ensure the system encounters diverse reasoning requirements, we construct a u
 The system routes queries to one of three distinct retrieval pipelines. These act as the classification targets.
 
 1.  **Dense RAG:** (Baseline) Vector search (`all-MiniLM-L6-v2`) + Chunk retrieval.
-2.  **GraphRAG:** Entity-relation traversal (NetworkX/Neo4j) for multi-hop reasoning.
+2.  **GraphRAG:** Relation-aware traversal (Triples) (NetworkX) for multi-hop reasoning.
 3.  **Temporal RAG:** Metadata-filtered retrieval for time-bound queries.
 
 ### Label Generation Logic (The Oracle)
@@ -72,7 +72,7 @@ The routers consume two categories of data:
 *   **Semantic Distance:** Average distance between the query and the retrieved cluster centroid.
 
 ## 5. The Model Architectures (Routers)
-We evaluate three distinct software architectures:
+We evaluate four distinct software architectures:
 
 ### Type 1: Heuristic Router (Baseline)
 *   **Physical Form:** Python script with Regex and `if/else` logic.
@@ -92,6 +92,11 @@ We evaluate three distinct software architectures:
 *   **Mechanism:** In-context learning and reasoning.
 *   **Goal:** To establish the performance ceiling.
 
+### Type 4: Shallow Keyword Classifier (Baseline)
+*   **Physical Form:** Scikit-Learn Logistic Regression (or a small MLP).
+*   **Input:** Sparse binary keyword/regex feature vector (e.g., `has_when`, `has_digit`, `starts_with_why`).
+*   **Goal:** To isolate the impact of lexical signals vs deep semantic understanding (i.e., “Do we need BERT?”).
+
 ## 6. The Ablation Grid (Testing Matrix)
 We perform a 3x3 ablation study. Each cell represents a distinct experiment script.
 
@@ -100,6 +105,8 @@ We perform a 3x3 ablation study. Each cell represents a distinct experiment scri
 | **1. Heuristic** | **Test H-Q:** Keyword/Regex matching. | **Test H-F:** Thresholds on Skewness/Max Score. | **Test H-C:** Logic tree (Keywords $\rightarrow$ then Stats). |
 | **2. Classifier** | **Test C-Q:** Standard DistilBERT (Text classification). | **Test C-F:** Simple MLP (Feed-forward network on stats). | **Test C-C:** DistilBERT + Concatenated Feature Vector. |
 | **3. LLM** | **Test L-Q:** Standard Prompt ("Classify this text"). | **Test L-F:** Stats Prompt ("Given these scores..."). | **Test L-C:** Chain-of-Thought ("Analyze text and scores"). |
+
+*Note:* We run an additional side-comparison of **C-Q (DistilBERT)** vs **C-Q-KW (Shallow Keywords)** to validate the necessity of Transformer-based encoding.
 
 ## 7. Evaluation Metrics
 1.  **Routing Accuracy:** % of times the router picked the "Gold Label" strategy.

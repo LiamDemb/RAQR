@@ -27,7 +27,7 @@ We frame the research as a controlled experiment using a "Gold Label" (Oracle) m
 To ensure broad coverage of reasoning types, the system routes between three distinct behaviours, each utilising a different knowledge representation:
 
 1.  **Dense RAG:** The baseline vector-chunk retrieval; optimal for specific, local factual lookups.
-2.  **GraphRAG:** Entity-relationship traversal for complex, multi-hop reasoning across documents.
+2.  **GraphRAG:** Relation-aware traversal (Subject-Predicate-Object triples) for complex, multi-hop reasoning across documents.
 3.  **Temporal RAG:** Time-indexed retrieval for chronological, trend-based, or "as-of" queries.
 
 ## 4. The Variables (What We Are Testing)
@@ -41,6 +41,7 @@ We are conducting a two-dimensional ablation study:
 
 ### Dimension B: Model Class (Implementation)
 *   **Heuristic:** Deterministic, training-free rules (e.g., "If skewness < X, use GraphRAG").
+*   **Shallow Keyword Baseline (C-Q-KW):** A supervised classifier using only explicit keyword/regex flags (e.g., `has_date`, `starts_with_why`) with Logistic Regression or a small MLP.
 *   **Lightweight Classifier:** A supervised BERT-style encoder trained on the Oracle labels.
 *   **LLM Router:** A prompted Large Language Model relying on in-context reasoning.
 
