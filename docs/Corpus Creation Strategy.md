@@ -20,6 +20,7 @@
 
 * Building a perfect KG (GraphRAG is intentionally “minimum viable,” NetworkX-based). 
 * Exhaustive Wikipedia ingestion.
+* **A separate temporal Knowledge Graph.** Temporal RAG uses metadata-filtered dense retrieval (vector search + year filter), not a temporal KG.
 
 
 ## 1) Inputs, Outputs, and Physical Artifacts
@@ -85,9 +86,9 @@ Each line is one **chunk**, not one document.
 
 **Notes**
 
-* `years/year_min/year_max` enable Temporal RAG filtering.
+* The corpus supports **relation extraction (triples)** for GraphRAG: `relations[]` enables relation-aware 1-hop expansion `Entity --predicate--> Entity`, with evidence resolved via `Entity -> Chunk` provenance edges.
+* The corpus supports **year extraction** for Temporal RAG: `years/year_min/year_max` enable metadata-filtered dense retrieval (vector search + year filter). There is **no separate temporal Knowledge Graph**; Temporal RAG is metadata filtering on the shared vector store.
 * `entities[].norm` is the GraphRAG join key (string-canonical), with optional `qid` when resolvable.
-* `relations[]` enables relation-aware 1-hop expansion: `Entity --predicate--> Entity`, with evidence resolved via `Entity -> Chunk` provenance edges.
 * `anchors.outgoing_titles` is lightweight “connective tissue” to support multi-hop traversal without requiring a full hyperlink graph.
 
 

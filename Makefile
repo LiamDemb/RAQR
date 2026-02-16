@@ -1,4 +1,4 @@
-.PHONY: install lock test ingest build-corpus build-corpus-simple
+.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple
 
 -include .env
 
@@ -11,6 +11,9 @@ HF_HOME ?= $(OUTPUT_DIR)/hf_cache
 
 install:
 	poetry install
+
+setup-models:
+	HF_HOME="$(HF_HOME)" poetry run python scripts/00_setup_models.py
 
 lock:
 	poetry lock

@@ -52,41 +52,6 @@ def load_rebel(model_name: str = "Babelscape/rebel-large", device: Optional[str]
     model.eval()
     return tokenizer, model, resolved_device
 
-def load_rebel(model_name: str = "Babelscape/rebel-large", device: Optional[str] = None):
-    # Standard environment optimizations for avoiding thread-bloat
-    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    os.environ.setdefault("OMP_NUM_THREADS", "1")
-    os.environ.setdefault("MKL_NUM_THREADS", "1")
-    
-    try:
-        torch.set_num_threads(1)
-        torch.set_num_interop_threads(1)
-    except RuntimeError:
-        pass
-
-    # Determine the best available device
-    if device:
-        resolved_device = device
-    elif torch.cuda.is_available():
-        resolved_device = "cuda"
-    #elif torch.backends.mps.is_available():
-        #resolved_device = "mps" # <--- Automatically picks your M1 Pro GPU
-    else:
-        resolved_device = "cpu"
-
-    print(f"Loading REBEL onto: {resolved_device}")
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_name,
-        low_cpu_mem_usage=True,
-    )
-    
-    model.to(resolved_device)
-    model.eval()
-    
-    return tokenizer, model, resolved_device
-
 
 def _truncate_text(text: str, max_chars: int) -> str:
     if max_chars <= 0:

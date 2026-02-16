@@ -30,32 +30,37 @@ _Note: Thresholds (0.5, 0.65, 0.4) are initial hyperparameters. These will be tu
 
 ## 2. Classifier Model Architecture ("Late Fusion")
 
-The Lightweight Classifier must process two distinct data modalities: **Text** (Tokens) and **Signals** (Floats). We will use a **Late Fusion** architecture.
+The Lightweight Classifier must process distinct **feature families**: **Q-Emb** (query embedding), **Q-Feat** (engineered query features), and **Probe** (retrieval feedback). We use a **Late Fusion** architecture, concatenating these modalities before the classification head.
 
-### Physical Architecture
+**Stage 1 signal ablation:** Stage 1 holds the architecture fixed (classifier) and only swaps input channels (Q-Emb only, Q-Feat only, Probe only, or combinations) to determine the winning input set. Stage 2 then compares Heuristic vs Classifier vs LLM using that winning set.
 
-1.  **Text Branch:**
+### Physical Architecture (Late Fusion Expectations)
+
+1.  **Q-Emb Branch (Text):**
     - Input: Tokenized Query (max length 512).
     - Backbone: `DistilBERT-base-uncased` (frozen or fine-tuned).
     - Output: `[CLS]` token embedding (Dimension: 768).
-2.  **Signal Branch:**
-    - Input: Vector of 5 floats `[max, min, mean, skew, dist]`.
+2.  **Q-Feat + Probe Branch (Signals):**
+    - Q-Feat: length/token count, entity density (via spaCy), complexity keywords; optional syntax depth.
+    - Probe: max score, skewness, semantic dispersion (alias: semantic distance).
+    - Input: Vector of floats (dimension depends on active channels).
     - Layer: Batch Normalization (Crucial: scales inputs to 0-1 range).
-    - Output: Signal Vector (Dimension: 5).
+    - Output: Signal Vector.
 3.  **Fusion Layer:**
     - Operation: `torch.cat([CLS_Vector, Signal_Vector], dim=1)`
-    - Result: Combined Vector (Dimension: 773).
+    - Result: Combined Vector (dimension = 768 + signal dimension).
 4.  **Classification Head:**
-    - Layer 1: Linear (773 -> 256) + ReLU + Dropout(0.2).
+    - Layer 1: Linear (input_dim -> 256) + ReLU + Dropout(0.2).
     - Layer 2: Linear (256 -> 3) (3 Classes).
     - Output: Softmax probability distribution.
 
-### Keyword Baseline (C-Q-KW)
-We include an additional shallow supervised baseline that uses **only keyword/regex features** (no embeddings).\n\n- **Model:** Logistic Regression (or small MLP)\n- **Input:** sparse binary flags (e.g., `has_when`, `has_digit`, `starts_with_why`)\n- **Output:** 3-class prediction (Dense / Temporal / Graph)
+## 3. Feature Families (Q-Emb / Q-Feat / Probe)
 
-## 3. Feedback Signal Definitions
+**Q-Emb:** DistilBERT [CLS] embedding (768 dims).
 
-The Probe runs a standard Dense retrieval (top-k=10). We extract signals from the resulting `scores` list (cosine similarity).
+**Q-Feat:** Engineered query features—length/token count, entity density (spaCy NER), complexity keywords; optional syntax depth.
+
+**Probe:** Top-10 Dense retrieval signals. The Probe runs a standard Dense retrieval (top-k=10). We extract signals from the resulting `scores` list (cosine similarity):
 
 | Signal                | Definition / Formula                                                                                 | Library Implementation        |
 | :-------------------- | :--------------------------------------------------------------------------------------------------- | :---------------------------- |
@@ -63,7 +68,7 @@ The Probe runs a standard Dense retrieval (top-k=10). We extract signals from th
 | **Min Score**         | $S_{min} = \min(scores)$                                                                             | `np.min(scores)`              |
 | **Mean Score**        | $\mu = \frac{1}{k}\sum scores$                                                                       | `np.mean(scores)`             |
 | **Skewness**          | Measure of asymmetry. High skew = sharp peak (good). Low skew = flat (ambiguous).                    | `scipy.stats.skew(scores)`    |
-| **Semantic Distance** | Distance between the Query Embedding ($Q$) and the Centroid ($C$) of the retrieved chunk embeddings. | `1 - cosine_similarity(Q, C)` |
+| **Semantic dispersion** | Average distance between the Query Embedding ($Q$) and the Centroid ($C$) of the retrieved chunk embeddings. | `1 - cosine_similarity(Q, C)` |
 
 ## 4. Strategy Implementation Specs
 
@@ -81,7 +86,7 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
             - **Provenance Edge:** `Entity --> Chunk` (`appears_in`) to link evidence back to text.
     3.  **Retrieval:** Extract entities from query $\rightarrow$ map to graph entity nodes $\rightarrow$ traverse outgoing **relational** edges (1-hop) $\rightarrow$ collect chunks linked via provenance edges from the expanded entity set.
 
-### B. TemporalRAG (Metadata Filter)
+### B. TemporalRAG (Metadata Filter, No Temporal KG)
 
 - **Ingestion:** Run a regex date extractor over the corpus. Save `year` into the vector store metadata.
 - **Retrieval:**

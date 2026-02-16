@@ -144,7 +144,7 @@ def ingest_complextempqa(
         if len(pages) >= budgets.max_pages_per_question:
             break
 
-    context_props = ["P17", "P131", "P463", "P361", "P571", "P585"]
+    context_props = ["P17", "P131", "P463", "P361", "P571", "P585"] # INCLUDE_REPORT (WHY WERE THESE CHOSEN?)
     context_qids: Set[str] = set()
     for qid in seed_qids:
         context_qids.update(
