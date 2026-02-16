@@ -16,8 +16,8 @@ To ensure the system encounters diverse reasoning requirements, we construct a u
 The system routes queries to one of three distinct retrieval pipelines. These act as the classification targets.
 
 1.  **Dense RAG:** (Baseline) Vector search (`all-MiniLM-L6-v2`) + Chunk retrieval.
-2.  **GraphRAG:** Entity-relation traversal (NetworkX/Neo4j) for multi-hop reasoning.
-3.  **Temporal RAG:** Metadata-filtered retrieval for time-bound queries.
+2.  **GraphRAG:** Relation-aware traversal (Subject-Predicate-Object triples) (NetworkX) for multi-hop reasoning.
+3.  **Temporal RAG:** Metadata-filtered dense retrieval (vector search + year filter); no separate temporal Knowledge Graph.
 
 ### Label Generation Logic (The Oracle)
 To generate training data, every question is processed by all 3 strategies. The Oracle produces a single "Gold Label" using a **margin-based simplicity bias** rule.
@@ -58,18 +58,22 @@ We select \(\delta\) empirically on the **Dev** set:
 - Keep **Test** untouched until the Phase 5 ablation runs.
 
 ## 4. The Input Signals (Features)
-The routers consume two categories of data:
+Routers consume three feature families, aligned with the two-stage ablation:
 
-### A. Question Features (Static)
-*   **Raw Text:** The user's query string.
-*   **Keywords:** Presence of trigger terms (e.g., "when", "relationship", "cause") via Regex.
-*   **Embeddings:** A 384-dimensional vector representation of the query.
+### A. Q-Emb (Query Embedding)
+*   **DistilBERT [CLS] embedding:** 768-dimensional vector representation of the query (from `DistilBERT-base-uncased`). Used as the semantic representation of the query for routing.
 
-### B. Retrieval Feedback (Dynamic/Probe)
-*Derived from a "Probe Search" (a fast top-k retrieval using the Dense index).*
-*   **Max Score:** The cosine similarity of the top result (Proxy for confidence).
+### B. Q-Feat (Query Features, Engineered)
+*   **Length / token count:** Query string length and token count (basic complexity proxy).
+*   **Entity density:** Number of entities per token (via spaCy NER); higher density may indicate multi-hop or graph-relevant queries.
+*   **Complexity keywords:** Presence of trigger terms (e.g., "when", "relationship", "cause", "how does X affect Y") via Regex.
+*   **Optional syntax depth:** Parse-tree depth (e.g., spaCy dependency depth) for syntactic complexity; optional for Stage 1.
+
+### C. Probe (Retrieval Feedback, Dynamic)
+*Derived from a "Probe Search" (a fast top-10 Dense retrieval using the Dense index).*
+*   **Max Score:** The cosine similarity of the top result (proxy for confidence).
 *   **Score Skewness:** The statistical skew of the top-k score distribution. (High skew = precise; Low skew = confused/multi-hop).
-*   **Semantic Distance:** Average distance between the query and the retrieved cluster centroid.
+*   **Semantic dispersion:** Average distance between the query embedding and the retrieved cluster centroid. (Alias: "semantic distance"—we use "semantic dispersion" as the canonical term.)
 
 ## 5. The Model Architectures (Routers)
 We evaluate three distinct software architectures:
@@ -92,7 +96,50 @@ We evaluate three distinct software architectures:
 *   **Mechanism:** In-context learning and reasoning.
 *   **Goal:** To establish the performance ceiling.
 
-## 6. The Ablation Grid (Testing Matrix)
+Keywords and regex features are part of **Q-Feat** (engineered query features); they are not a separate router architecture.
+
+## 6. Two-Stage Ablation
+
+### Stage 1: Signal Ablation (Hold Model Class Fixed)
+Stage 1 holds the **architecture fixed** (Classifier) and ablates **input channels** to determine which feature family(ies) best support routing:
+
+| Input Set | Description |
+| :--- | :--- |
+| **Q-Emb only** | DistilBERT [CLS] embedding (768 dims) only. |
+| **Q-Feat only** | Engineered features (length, entity density, complexity keywords, optional syntax depth) only. |
+| **Probe only** | Top-10 Dense retrieval signals (max score, skewness, semantic dispersion) only. |
+| **Q-Emb + Q-Feat** | Combined query-side signals (no probe). |
+| **Q-Emb + Probe** | Embedding + probe stats. |
+| **Q-Feat + Probe** | Engineered features + probe stats. |
+| **Q-Emb + Q-Feat + Probe** | Full combined input. |
+
+The winning input set (by routing accuracy on Dev) advances to Stage 2.
+
+### Stage 2: Architecture Showdown (Use Winning Input Set)
+Stage 2 compares **Heuristic vs Classifier vs LLM** using the winning input set from Stage 1:
+
+| Model Class | Description |
+| :--- | :--- |
+| **Heuristic** | Deterministic rules (Regex + keyword logic; probe thresholds when Probe is in the input set). |
+| **Classifier** | Supervised DistilBERT-based encoder with late fusion (text + numerical features). |
+| **LLM** | Prompted Large Language Model with in-context reasoning. |
+
+### Monolithic Baselines (RQ3 Extension)
+For RQ3 (impact of routing errors), we also run **monolithic baselines**:
+*   **Always-Dense:** Route every query to Dense RAG.
+*   **Always-Temporal:** Route every query to Temporal RAG.
+*   **Always-Graph:** Route every query to Graph RAG.
+
+These establish performance floors and allow **routing regret** analysis.
+
+### Routing Regret & Severity Taxonomy
+*   **Routing regret** is defined as: \(\text{regret} = \text{oracleF1} - \text{selectedF1}\), i.e. the downstream F1 loss when the router selects a strategy different from the Oracle's best.
+*   **Severity taxonomy:** We categorize routing errors by impact:
+    *   **Forgivable:** Marginal F1 loss; Oracle and selected strategy perform similarly.
+    *   **Moderate:** Noticeable degradation; selected strategy underperforms but remains usable.
+    *   **Fatal:** Severe failure; selected strategy produces poor or empty answers where Oracle would succeed.
+
+## 7. The Ablation Grid (Testing Matrix)
 We perform a 3x3 ablation study. Each cell represents a distinct experiment script.
 
 | Model Class | Input: Question Only | Input: Feedback Only | Input: Combined |
@@ -101,7 +148,7 @@ We perform a 3x3 ablation study. Each cell represents a distinct experiment scri
 | **2. Classifier** | **Test C-Q:** Standard DistilBERT (Text classification). | **Test C-F:** Simple MLP (Feed-forward network on stats). | **Test C-C:** DistilBERT + Concatenated Feature Vector. |
 | **3. LLM** | **Test L-Q:** Standard Prompt ("Classify this text"). | **Test L-F:** Stats Prompt ("Given these scores..."). | **Test L-C:** Chain-of-Thought ("Analyze text and scores"). |
 
-## 7. Evaluation Metrics
+## 8. Evaluation Metrics
 1.  **Routing Accuracy:** % of times the router picked the "Gold Label" strategy.
 2.  **Downstream Performance:** F1 Score / Exact Match of the final answer produced by the routed strategy.
 3.  **Efficiency:** Inference latency (ms) and cost per 1k queries.
@@ -109,7 +156,7 @@ We perform a 3x3 ablation study. Each cell represents a distinct experiment scri
 5.  **Optional Utility Score:** A simple cost-aware summary, e.g. \(U = \text{DownstreamF1} - \lambda \cdot \text{end\_to\_end\_latency\_ms}\) (or cost), reported alongside raw metrics.
 6.  **Graph Diagnostic (Match Rate):** “% of queries with \(\ge 1\) entity match in the graph” (after entity normalization). This is not a primary metric, but it helps interpret when GraphRAG underperforms due to surface-form mismatch rather than reasoning.
 
-## 8. Reproducibility & Measurement Protocols
+## 9. Reproducibility & Measurement Protocols
 These are experimental controls required to make ablation results credible and reproducible.
 
 ### A. Experiment Tracking (Required Fields)

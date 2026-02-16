@@ -24,27 +24,35 @@ The Heuristic Router is implemented as a **Priority Cascade**. It evaluates rule
 *Note: Thresholds (0.5, 0.65, 0.4) are initial hyperparameters. These will be tuned on the Dev Set.*
 
 ## 2. Classifier Model Architecture ("Late Fusion")
-The Lightweight Classifier must process two distinct data modalities: **Text** (Tokens) and **Signals** (Floats). We will use a **Late Fusion** architecture.
+The Lightweight Classifier must process distinct **feature families**: **Q-Emb** (query embedding), **Q-Feat** (engineered query features), and **Probe** (retrieval feedback). We use a **Late Fusion** architecture, concatenating these modalities before the classification head.
 
-### Physical Architecture
-1.  **Text Branch:**
+**Stage 1 signal ablation:** Stage 1 holds the architecture fixed (classifier) and only swaps input channels (Q-Emb only, Q-Feat only, Probe only, or combinations) to determine the winning input set. Stage 2 then compares Heuristic vs Classifier vs LLM using that winning set.
+
+### Physical Architecture (Late Fusion Expectations)
+1.  **Q-Emb Branch (Text):**
     *   Input: Tokenized Query (max length 512).
     *   Backbone: `DistilBERT-base-uncased` (frozen or fine-tuned).
     *   Output: `[CLS]` token embedding (Dimension: 768).
-2.  **Signal Branch:**
-    *   Input: Vector of 5 floats `[max, min, mean, skew, dist]`.
+2.  **Q-Feat + Probe Branch (Signals):**
+    *   Q-Feat: length/token count, entity density (via spaCy), complexity keywords; optional syntax depth.
+    *   Probe: max score, skewness, semantic dispersion (alias: semantic distance).
+    *   Input: Vector of floats (dimension depends on active channels).
     *   Layer: Batch Normalization (Crucial: scales inputs to 0-1 range).
-    *   Output: Signal Vector (Dimension: 5).
+    *   Output: Signal Vector.
 3.  **Fusion Layer:**
     *   Operation: `torch.cat([CLS_Vector, Signal_Vector], dim=1)`
-    *   Result: Combined Vector (Dimension: 773).
+    *   Result: Combined Vector (dimension = 768 + signal dimension).
 4.  **Classification Head:**
-    *   Layer 1: Linear (773 -> 256) + ReLU + Dropout(0.2).
+    *   Layer 1: Linear (input_dim -> 256) + ReLU + Dropout(0.2).
     *   Layer 2: Linear (256 -> 3) (3 Classes).
     *   Output: Softmax probability distribution.
 
-## 3. Feedback Signal Definitions
-The Probe runs a standard Dense retrieval (top-k=10). We extract signals from the resulting `scores` list (cosine similarity).
+## 3. Feature Families (Q-Emb / Q-Feat / Probe)
+**Q-Emb:** DistilBERT [CLS] embedding (768 dims).
+
+**Q-Feat:** Engineered query features—length/token count, entity density (spaCy NER), complexity keywords; optional syntax depth.
+
+**Probe:** Top-10 Dense retrieval signals. The Probe runs a standard Dense retrieval (top-k=10). We extract signals from the resulting `scores` list (cosine similarity):
 
 | Signal | Definition / Formula | Library Implementation |
 | :--- | :--- | :--- |
@@ -52,7 +60,7 @@ The Probe runs a standard Dense retrieval (top-k=10). We extract signals from th
 | **Min Score** | $S_{min} = \min(scores)$ | `np.min(scores)` |
 | **Mean Score** | $\mu = \frac{1}{k}\sum scores$ | `np.mean(scores)` |
 | **Skewness** | Measure of asymmetry. High skew = sharp peak (good). Low skew = flat (ambiguous). | `scipy.stats.skew(scores)` |
-| **Semantic Distance** | Distance between the Query Embedding ($Q$) and the Centroid ($C$) of the retrieved chunk embeddings. | `1 - cosine_similarity(Q, C)` |
+| **Semantic dispersion** | Average distance between the Query Embedding ($Q$) and the Centroid ($C$) of the retrieved chunk embeddings. | `1 - cosine_similarity(Q, C)` |
 
 ## 4. Strategy Implementation Specs
 To keep the scope manageable, we will implement "Minimum Viable Versions" of the complex strategies. We are testing the *routing*, not building the world's best GraphRAG.
@@ -61,10 +69,12 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
 *   **Representation:** We will not create a massive Neo4j instance.
 *   **Implementation:**
     *   **Graph Schema (explicit):**
-        *   **Nodes:** `Entity` nodes (from spaCy; optional GLiNER) and `Chunk` nodes (document chunk IDs).
-        *   **Edges (minimum):** `Entity -> Chunk` membership if an entity occurs in that chunk.
-        *   **Edges (optional):** `Entity <-> Entity` co-occurrence within the same chunk (or within a small window).
-        *   **Retrieval:** extract entities from query → find matching `Entity` nodes → retrieve connected `Chunk` nodes (and optionally 1-hop expansion).
+        *   **Nodes:** `Entity` nodes and `Chunk` nodes (document chunk IDs).
+        *   **Edges (primary):** Directed semantic relations from extracted triples: `Entity --predicate--> Entity`.
+        *   **Edges (provenance):** `Entity --> Chunk` (`appears_in`) to provide evidence text for relations.
+        *   **Retrieval:** extract entities from query → map to graph entity nodes → traverse 1-hop relational edges → resolve to chunks via provenance edges.
+    *   **Relation Extraction Policy:**
+        *   Run a lightweight RE model (e.g., `REBEL` or a GLiNER-relation model) over chunk text to extract `(subject, predicate, object)` triples.
     *   **Entity Normalization Policy (to reduce surface-form mismatch):**
         *   Lowercase
         *   Strip punctuation / normalize whitespace
@@ -73,11 +83,11 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
     *   **Diagnostic to log:** entity match rate on the benchmark:
         *   “% of queries with \(\ge 1\) entity match in the graph” (after normalization).
         *   This helps distinguish “GraphRAG failed due to aliasing/matching” from “Graph reasoning not needed”.
-    1.  **Ingestion:** Use `spaCy` to extract entities (ORG, PERSON, GPE) from chunks.
-    2.  **Storage:** Store relations in a NetworkX graph (in-memory) or simple adjacency list JSON.
-    3.  **Retrieval:** Extract entities from Query $\rightarrow$ Find nodes in Graph $\rightarrow$ Retrieve 1-hop neighbors $\rightarrow$ Return text chunks associated with those neighbors.
+    1.  **Ingestion:** Extract entities + semantic triples \((subject, predicate, object)\) from chunk text using a lightweight Relation Extraction model (e.g., `REBEL` or a GLiNER-relation model).
+    2.  **Storage:** Store a NetworkX **DiGraph** with directed `Entity --predicate--> Entity` semantic edges and `Entity --> Chunk` provenance edges.
+    3.  **Retrieval:** Extract entities from query $\rightarrow$ map to entity nodes $\rightarrow$ traverse outgoing relational edges (1-hop) $\rightarrow$ collect evidence chunks via provenance edges.
 
-### B. TemporalRAG (Metadata Filter)
+### B. TemporalRAG (Metadata Filter, No Temporal KG)
 *   **Ingestion:** Run a regex date extractor over the corpus. Save `year` into the vector store metadata.
 *   **Retrieval:**
     1.  Extract year range from query (e.g., "2019-2021").
