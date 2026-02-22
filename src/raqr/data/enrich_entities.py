@@ -16,6 +16,12 @@ def normalize_key(text: str) -> str:
     s = re.sub(r"['’]s\b", "", s)
     s = re.sub(r"[^\w\s-]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
+    # Keep alias/entity lookup deterministic across common title forms.
+    while True:
+        stripped = re.sub(r"^(the|a|an)\s+", "", s).strip()
+        if stripped == s:
+            break
+        s = stripped
     return s
 
 

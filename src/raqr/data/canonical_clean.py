@@ -8,6 +8,15 @@ from .corpus_schemas import Block, StructuredDoc
 
 
 DROP_TAGS = ["script", "style", "nav", "footer", "aside"]
+CITATION_SELECTORS = [
+    "sup.reference",
+    "sup.mw-ref",
+    "span.mw-ref",
+    "a.mw-ref",
+    "ol.references",
+    "div.reflist",
+    "div#mw-references-wrap",
+]
 
 
 def _table_to_text(table, max_rows: int = 30, max_cols: int = 8) -> str:
@@ -42,6 +51,9 @@ def clean_html_to_structured_doc(
     soup = BeautifulSoup(html or "", "lxml")
     for tag in DROP_TAGS:
         for node in soup.find_all(tag):
+            node.decompose()
+    for selector in CITATION_SELECTORS:
+        for node in soup.select(selector):
             node.decompose()
 
     blocks: List[Block] = []
