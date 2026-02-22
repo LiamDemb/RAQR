@@ -23,17 +23,18 @@ def build_alias_map_from_redirects(
     batch_size: int = 20,
     curated_aliases: Dict[str, str] | None = None,
 ) -> Dict[str, str]:
-    title_list = [t for t in titles if t]
+    title_list = sorted({t for t in titles if t})
     redirect_map: Dict[str, List[str]] = {}
     for i in range(0, len(title_list), batch_size):
         batch = title_list[i : i + batch_size]
         redirect_map.update(wiki.fetch_redirects(batch))
 
     alias_map: Dict[str, str] = {}
-    for canonical, redirects in redirect_map.items():
-        for redirect in redirects:
+    for canonical in sorted(redirect_map):
+        redirects = redirect_map.get(canonical, [])
+        for redirect in sorted(set(redirects)):
             alias_map[normalize_key(redirect)] = normalize_key(canonical)
 
-    curated = curated_aliases or CURATED_ALIASES
+    curated = CURATED_ALIASES if curated_aliases is None else curated_aliases
     alias_map.update(normalize_alias_map(curated))
     return alias_map

@@ -36,6 +36,28 @@ def test_clean_html_to_structured_doc_parses_blocks():
     assert any(block.block_type == "table" for block in doc.blocks)
 
 
+def test_clean_html_removes_citation_markup_but_keeps_plain_brackets():
+    html = """
+    <html><body>
+      <p>Population rose in 2010<sup class="reference"><a>[12]</a></sup>.</p>
+      <p>Model [3] is referenced in plain text and should remain.</p>
+      <ol class="references"><li id="cite_note-12">Citation text</li></ol>
+    </body></html>
+    """
+    doc = clean_html_to_structured_doc(
+        html=html,
+        doc_id="doc-footnote",
+        title="Footnotes",
+        url=None,
+        anchors={"outgoing_titles": [], "incoming_stub": []},
+        source="wiki",
+        dataset_origin="wiki",
+    )
+    all_text = "\n".join(block.text for block in doc.blocks)
+    assert "[12]" not in all_text
+    assert "Model [3]" in all_text
+
+
 def test_extract_years_and_aggregate():
     text = "In 1999 the event happened again in 2001-2003."
     years = extract_years(text)
