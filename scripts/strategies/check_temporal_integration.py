@@ -1,8 +1,8 @@
 """Run a real end-to-end integration check for TemporalStrategy.
 
 This script validates that TemporalStrategy can:
-1) load real artifacts (including vector_meta.parquet with year_min/year_max),
-2) extract years from a query and filter by year metadata,
+1) load real artifacts (including vector_meta.parquet year metadata),
+2) extract years from a query and filter by explicit year intersection,
 3) call the real generator with filtered contexts, and
 4) return a structurally valid StrategyResult.
 
@@ -36,6 +36,8 @@ def _build_strategy(
     model_name: str,
     top_k: int,
     candidate_multiplier: int,
+    alpha: float,
+    beta: float,
 ) -> TemporalStrategy:
     corpus_path = f"{output_dir}/corpus.jsonl"
     index_path = f"{output_dir}/vector_index.faiss"
@@ -55,6 +57,8 @@ def _build_strategy(
         corpus=JsonCorpusLoader(jsonl_path=corpus_path),
         top_k=top_k,
         candidate_multiplier=candidate_multiplier,
+        alpha=alpha,
+        beta=beta,
     )
 
 
@@ -95,6 +99,18 @@ def main() -> int:
         default=3,
         help="How many retrieved contexts to print.",
     )
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=float(os.getenv("TEMPORAL_ALPHA", "0.6")),
+        help="Weight for semantic score in hybrid ranking.",
+    )
+    parser.add_argument(
+        "--beta",
+        type=float,
+        default=float(os.getenv("TEMPORAL_BETA", "0.4")),
+        help="Weight for temporal score in hybrid ranking.",
+    )
     args = parser.parse_args()
 
     output_dir = args.output_dir
@@ -109,6 +125,7 @@ def main() -> int:
     print(f"- model_name: {args.model_name}")
     print(f"- top_k: {args.top_k}")
     print(f"- candidate_multiplier: {args.candidate_multiplier}")
+    print(f"- alpha/beta: {args.alpha}/{args.beta}")
     print(f"- query: {args.query}")
     print("")
 
@@ -131,6 +148,8 @@ def main() -> int:
         model_name=args.model_name,
         top_k=args.top_k,
         candidate_multiplier=args.candidate_multiplier,
+        alpha=args.alpha,
+        beta=args.beta,
     )
 
     result = strategy.retrieve_and_generate(args.query)
@@ -156,8 +175,19 @@ def main() -> int:
     if result.context_scores:
         show_n = max(0, args.show_contexts)
         print(f"\nTop {min(show_n, len(result.context_scores))} contexts")
+        debug_rows = getattr(strategy, "_last_debug_candidates", None) or []
         for idx, (ctx, score) in enumerate(result.context_scores[:show_n], start=1):
             print(f"\n[{idx}] score={score:.4f}")
+            if idx - 1 < len(debug_rows):
+                row = debug_rows[idx - 1]
+                print(
+                    "debug:"
+                    f" semantic={row.get('semantic_score', float('nan')):.4f},"
+                    f" temporal={row.get('temporal_score', float('nan')):.4f},"
+                    f" matched_years={row.get('matched_years', [])},"
+                    f" chunk_years={row.get('chunk_years', [])},"
+                    f" chrono_year={row.get('chrono_year')}"
+                )
             print(ctx[:800])
 
     print("\nSummary")

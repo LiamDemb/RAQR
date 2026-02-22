@@ -1,48 +1,15 @@
-"""Tests for the Temporal retrieval strategy."""
+"""Tests for upgraded Temporal retrieval strategy behavior."""
 
 from pathlib import Path
 from typing import Optional
 from unittest.mock import MagicMock
 
-import faiss
 import numpy as np
 import pandas as pd
 
 from raqr.generator import GenerationResult
 from raqr.loaders import VectorMetaWithYears
-from raqr.strategies.base import StrategyResult
 from raqr.strategies.temporal import TemporalStrategy
-
-
-def _make_tiny_index_and_meta_with_years(
-    tmp_path: Path,
-    dim: int = 384,
-    year_spec: Optional[list[tuple[Optional[int], Optional[int]]]] = None,
-) -> tuple[str, str]:
-    """Build FAISS index + vector_meta.parquet with year_min, year_max per row."""
-    if year_spec is None:
-        year_spec = [(2016, 2018), (2017, 2017), (2019, 2020), (None, None), (2017, 2018)]
-    n = len(year_spec)
-    rng = np.random.default_rng(42)
-    vecs = rng.standard_normal((n, dim)).astype(np.float32)
-    vecs /= np.linalg.norm(vecs, axis=1, keepdims=True)
-    index = faiss.IndexFlatIP(dim)
-    index.add(vecs)
-    idx_path = tmp_path / "vector_index.faiss"
-    faiss.write_index(index, str(idx_path))
-    rows = []
-    for i in range(n):
-        ymin, ymax = year_spec[i]
-        rows.append({
-            "row_id": i,
-            "chunk_id": f"c{i}",
-            "year_min": ymin,
-            "year_max": ymax,
-        })
-    meta = pd.DataFrame(rows)
-    meta_path = tmp_path / "vector_meta.parquet"
-    meta.to_parquet(meta_path, index=False)
-    return str(idx_path), str(meta_path)
 
 
 class MockCorpus:
@@ -53,139 +20,144 @@ class MockCorpus:
         return self._texts.get(chunk_id)
 
 
-def test_query_with_year_returns_only_matching_contexts(tmp_path):
-    """Query containing a year returns only contexts whose year range contains that year."""
-    idx_path, meta_path = _make_tiny_index_and_meta_with_years(tmp_path, dim=384)
-    rng = np.random.default_rng(42)
-    vecs = rng.standard_normal((5, 384)).astype(np.float32)
-    vecs /= np.linalg.norm(vecs, axis=1, keepdims=True)
-    query_vec = vecs[0]
+class FakeIndex:
+    def __init__(self, scores: list[float], row_ids: list[int]):
+        self._scores = np.array([scores], dtype=np.float32)
+        self._row_ids = np.array([row_ids], dtype=np.int64)
 
-    mock_embedder = MagicMock()
-    mock_embedder.embed_query.return_value = query_vec
-    mock_generator = MagicMock()
-    mock_generator.generate.return_value = GenerationResult(
-        text="Answer about 2017.",
-        model_id="test",
-        latency_ms=0.0,
-        prompt_hash="",
-        sampling={},
+    def search(self, x, k: int):
+        # k is ignored in this tiny fake; test controls shape.
+        return self._scores, self._row_ids
+
+
+class FakeIndexStore:
+    def __init__(self, index: FakeIndex):
+        self._index = index
+
+    def load(self):
+        return self._index
+
+
+def _write_meta(tmp_path: Path, rows: list[dict]) -> str:
+    df = pd.DataFrame(rows)
+    path = tmp_path / "vector_meta.parquet"
+    df.to_parquet(path, index=False)
+    return str(path)
+
+
+def test_strict_year_presence_rejects_bounds_only_match(tmp_path):
+    """Rows are rejected unless target year explicitly appears in years[] metadata."""
+    meta_path = _write_meta(
+        tmp_path,
+        [
+            {"row_id": 0, "chunk_id": "c0", "year_min": 1990, "year_max": 2020, "years": [1990, 2020]},
+            {"row_id": 1, "chunk_id": "c1", "year_min": 2017, "year_max": 2017, "years": [2017]},
+        ],
     )
-    corpus = MockCorpus({f"c{i}": f"chunk {i}" for i in range(5)})
-
-    from raqr.index_store import FaissIndexStore
-
     strategy = TemporalStrategy(
-        index_store=FaissIndexStore(index_path=idx_path),
+        index_store=FakeIndexStore(FakeIndex(scores=[0.95, 0.90], row_ids=[0, 1])),
         meta=VectorMetaWithYears(parquet_path=meta_path),
-        embedder=mock_embedder,
-        generator=mock_generator,
-        corpus=corpus,
-        top_k=5,
-        candidate_multiplier=2,
+        embedder=MagicMock(embed_query=MagicMock(return_value=np.zeros(4, dtype=np.float32))),
+        generator=MagicMock(
+            generate=MagicMock(
+                return_value=GenerationResult(
+                    text="answer", model_id="test", latency_ms=0.0, prompt_hash="", sampling={}
+                )
+            )
+        ),
+        corpus=MockCorpus({"c0": "broad years chunk", "c1": "focused 2017 chunk"}),
+        top_k=2,
     )
 
     result = strategy.retrieve_and_generate("What happened in 2017?")
     assert result.status == "OK"
-    assert len(result.context_scores) > 0
-    # Rows with 2017 in range: (2016,2018), (2017,2017), (2017,2018) -> c0, c1, c4
-    for ctx, score in result.context_scores:
-        assert "chunk 0" in ctx or "chunk 1" in ctx or "chunk 4" in ctx
-    assert result.error is None
+    assert len(result.context_scores) == 1
+    assert "focused 2017 chunk" in result.context_scores[0][0]
 
 
-def test_no_year_in_query_returns_no_context(tmp_path):
-    """Query with no detectable year returns NO_CONTEXT."""
-    idx_path, meta_path = _make_tiny_index_and_meta_with_years(tmp_path, dim=384)
-    mock_embedder = MagicMock()
-    mock_embedder.embed_query.return_value = np.zeros(384, dtype=np.float32)
-    mock_generator = MagicMock()
-    corpus = MockCorpus({f"c{i}": f"chunk {i}" for i in range(5)})
-
-    from raqr.index_store import FaissIndexStore
-
+def test_temporal_density_prefers_focused_chunk_at_same_semantic(tmp_path):
+    """When semantic score ties, focused chunk should rank above broad summary chunk."""
+    meta_path = _write_meta(
+        tmp_path,
+        [
+            {"row_id": 0, "chunk_id": "c0", "year_min": 2017, "year_max": 2017, "years": [2017]},
+            {"row_id": 1, "chunk_id": "c1", "year_min": 2009, "year_max": 2022, "years": [2009, 2017, 2022]},
+        ],
+    )
     strategy = TemporalStrategy(
-        index_store=FaissIndexStore(index_path=idx_path),
+        index_store=FakeIndexStore(FakeIndex(scores=[0.90, 0.90], row_ids=[0, 1])),
         meta=VectorMetaWithYears(parquet_path=meta_path),
-        embedder=mock_embedder,
-        generator=mock_generator,
-        corpus=corpus,
+        embedder=MagicMock(embed_query=MagicMock(return_value=np.zeros(4, dtype=np.float32))),
+        generator=MagicMock(
+            generate=MagicMock(
+                return_value=GenerationResult(
+                    text="answer", model_id="test", latency_ms=0.0, prompt_hash="", sampling={}
+                )
+            )
+        ),
+        corpus=MockCorpus({"c0": "focused", "c1": "broad"}),
+        top_k=2,
+        alpha=0.6,
+        beta=0.4,
+    )
+
+    result = strategy.retrieve_and_generate("What happened in 2017?")
+    assert result.status == "OK"
+    assert len(result.context_scores) == 2
+    assert "focused" in result.context_scores[0][0]
+    assert result.context_scores[0][1] > result.context_scores[1][1]
+
+
+def test_chronological_ordering_applies_after_hybrid_selection(tmp_path):
+    """Selected contexts are returned oldest->newest chronologically."""
+    meta_path = _write_meta(
+        tmp_path,
+        [
+            {"row_id": 0, "chunk_id": "c0", "year_min": 2018, "year_max": 2018, "years": [2018]},
+            {"row_id": 1, "chunk_id": "c1", "year_min": 2016, "year_max": 2016, "years": [2016]},
+            {"row_id": 2, "chunk_id": "c2", "year_min": 2017, "year_max": 2017, "years": [2017]},
+        ],
+    )
+    strategy = TemporalStrategy(
+        index_store=FakeIndexStore(FakeIndex(scores=[0.99, 0.95, 0.90], row_ids=[0, 1, 2])),
+        meta=VectorMetaWithYears(parquet_path=meta_path),
+        embedder=MagicMock(embed_query=MagicMock(return_value=np.zeros(4, dtype=np.float32))),
+        generator=MagicMock(
+            generate=MagicMock(
+                return_value=GenerationResult(
+                    text="answer", model_id="test", latency_ms=0.0, prompt_hash="", sampling={}
+                )
+            )
+        ),
+        corpus=MockCorpus({"c0": "year 2018", "c1": "year 2016", "c2": "year 2017"}),
         top_k=3,
+    )
+
+    result = strategy.retrieve_and_generate("What happened from 2016 to 2018?")
+    ordered_contexts = [ctx for (ctx, _) in result.context_scores]
+    assert ordered_contexts == ["year 2016", "year 2017", "year 2018"]
+
+
+def test_no_year_query_returns_no_context(tmp_path):
+    """No extracted years in query => Temporal not applicable => NO_CONTEXT."""
+    meta_path = _write_meta(
+        tmp_path,
+        [
+            {"row_id": 0, "chunk_id": "c0", "year_min": 2017, "year_max": 2017, "years": [2017]},
+        ],
+    )
+    mock_generator = MagicMock()
+    strategy = TemporalStrategy(
+        index_store=FakeIndexStore(FakeIndex(scores=[0.9], row_ids=[0])),
+        meta=VectorMetaWithYears(parquet_path=meta_path),
+        embedder=MagicMock(embed_query=MagicMock(return_value=np.zeros(4, dtype=np.float32))),
+        generator=mock_generator,
+        corpus=MockCorpus({"c0": "chunk"}),
+        top_k=1,
     )
 
     result = strategy.retrieve_and_generate("What is the capital of France?")
     assert result.status == "NO_CONTEXT"
     assert result.context_scores == []
     assert result.answer == ""
-    assert result.error is None
     mock_generator.generate.assert_not_called()
-
-
-def test_context_scores_sorted_descending(tmp_path):
-    """context_scores are sorted by score in descending order."""
-    idx_path, meta_path = _make_tiny_index_and_meta_with_years(tmp_path, dim=384)
-    rng = np.random.default_rng(42)
-    vecs = rng.standard_normal((5, 384)).astype(np.float32)
-    vecs /= np.linalg.norm(vecs, axis=1, keepdims=True)
-    query_vec = vecs[0]
-
-    mock_embedder = MagicMock()
-    mock_embedder.embed_query.return_value = query_vec
-    mock_generator = MagicMock()
-    mock_generator.generate.return_value = GenerationResult(
-        text="Answer", model_id="test", latency_ms=0.0, prompt_hash="", sampling={}
-    )
-    corpus = MockCorpus({f"c{i}": f"chunk {i}" for i in range(5)})
-
-    from raqr.index_store import FaissIndexStore
-
-    strategy = TemporalStrategy(
-        index_store=FaissIndexStore(index_path=idx_path),
-        meta=VectorMetaWithYears(parquet_path=meta_path),
-        embedder=mock_embedder,
-        generator=mock_generator,
-        corpus=corpus,
-        top_k=5,
-        candidate_multiplier=2,
-    )
-
-    result = strategy.retrieve_and_generate("What happened in 2017 or 2019?")
-    scores = [s for (_, s) in result.context_scores]
-    assert scores == sorted(scores, reverse=True)
-
-
-def test_fewer_than_k_matches_returns_fewer(tmp_path):
-    """When fewer than top_k chunks match the year filter, return that many (no backfill)."""
-    # Only rows 1 and 4 contain 1999; use a tiny spec that only has 1999 in two chunks
-    year_spec = [(1998, 2000), (1999, 1999), (2001, 2002), (2003, 2004), (2005, 2006)]
-    idx_path, meta_path = _make_tiny_index_and_meta_with_years(tmp_path, dim=384, year_spec=year_spec)
-    rng = np.random.default_rng(42)
-    vecs = rng.standard_normal((5, 384)).astype(np.float32)
-    vecs /= np.linalg.norm(vecs, axis=1, keepdims=True)
-    query_vec = vecs[0]
-
-    mock_embedder = MagicMock()
-    mock_embedder.embed_query.return_value = query_vec
-    mock_generator = MagicMock()
-    mock_generator.generate.return_value = GenerationResult(
-        text="Answer", model_id="test", latency_ms=0.0, prompt_hash="", sampling={}
-    )
-    corpus = MockCorpus({f"c{i}": f"chunk {i}" for i in range(5)})
-
-    from raqr.index_store import FaissIndexStore
-
-    strategy = TemporalStrategy(
-        index_store=FaissIndexStore(index_path=idx_path),
-        meta=VectorMetaWithYears(parquet_path=meta_path),
-        embedder=mock_embedder,
-        generator=mock_generator,
-        corpus=corpus,
-        top_k=5,
-        candidate_multiplier=2,
-    )
-
-    result = strategy.retrieve_and_generate("What happened in 1999?")
-    # Only row 0 (1998-2000) and row 1 (1999) contain 1999
-    assert result.status == "OK"
-    assert len(result.context_scores) == 2
-    assert result.error is None

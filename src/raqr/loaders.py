@@ -1,8 +1,9 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, Optional, Protocol, Tuple
+from typing import Dict, List, Optional, Protocol, Tuple
 import json
 import pandas as pd
+import numpy as np
 
 
 class RowIdToChunkId(Protocol):
@@ -39,16 +40,23 @@ class VectorMetaMapper:
 
 @dataclass
 class VectorMetaWithYears:
-    """Loads vector_meta.parquet with year_min/year_max; provides row_id -> chunk_id and row_id -> (year_min, year_max)."""
+    """Loads vector_meta.parquet with year fields for temporal filtering."""
 
     parquet_path: str
     row_col: str = "row_id"
     chunk_col: str = "chunk_id"
     year_min_col: str = "year_min"
     year_max_col: str = "year_max"
+    years_col: str = "years"
 
     def __post_init__(self) -> None:
-        cols = [self.row_col, self.chunk_col, self.year_min_col, self.year_max_col]
+        cols = [
+            self.row_col,
+            self.chunk_col,
+            self.year_min_col,
+            self.year_max_col,
+            self.years_col,
+        ]
         df = pd.read_parquet(self.parquet_path, columns=cols)
         df[self.row_col] = df[self.row_col].astype(int)
         df[self.chunk_col] = df[self.chunk_col].astype(str)
@@ -61,6 +69,19 @@ class VectorMetaWithYears:
         self._chunk: Dict[int, str] = dict(zip(df[self.row_col], df[self.chunk_col]))
         self._year_min: Dict[int, Optional[int]] = dict(zip(df[self.row_col], df["_ymin"]))
         self._year_max: Dict[int, Optional[int]] = dict(zip(df[self.row_col], df["_ymax"]))
+        self._years: Dict[int, List[int]] = {}
+        for row_id, raw_years in zip(df[self.row_col], df[self.years_col]):
+            parsed: List[int] = []
+            if isinstance(raw_years, (list, tuple, np.ndarray)):
+                parsed = [int(y) for y in raw_years if pd.notna(y)]
+            elif raw_years is not None and pd.notna(raw_years):
+                # Defensive parse for non-list parquet representations.
+                text = str(raw_years).strip()
+                if text:
+                    text = text.strip("[]")
+                    if text:
+                        parsed = [int(part.strip()) for part in text.split(",") if part.strip()]
+            self._years[int(row_id)] = sorted(set(parsed))
 
     def row_to_chunk(self, row_id: int) -> Optional[str]:
         return self._chunk.get(row_id)
@@ -70,6 +91,12 @@ class VectorMetaWithYears:
         if row_id not in self._chunk:
             return None
         return (self._year_min.get(row_id), self._year_max.get(row_id))
+
+    def get_years(self, row_id: int) -> Optional[List[int]]:
+        """Return explicit extracted years for the row, or None if row unknown."""
+        if row_id not in self._chunk:
+            return None
+        return list(self._years.get(row_id, []))
     
 @dataclass
 class JsonCorpusLoader:

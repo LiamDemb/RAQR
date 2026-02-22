@@ -21,9 +21,6 @@ class StrategyResult:
     error: Optional[str] = None
 
     def __post_init__(self):
-        # Sorting context scores in descending order of score
-        self.context_scores.sort(key=lambda x: x[1], reverse=True)
-    
         if self.status == "OK":
             if self.context_scores is None or len(self.context_scores) == 0:
                 raise ValueError("Status OK has an empty context_scores list")
