@@ -121,3 +121,80 @@ def test_graph_strategy_is_deterministic_for_same_query():
 
     assert result1.status == result2.status
     assert result1.context_scores == result2.context_scores
+
+
+def test_graph_strategy_df_downweighting_prefers_rare_entity_context():
+    chunks = [
+        {
+            "chunk_id": "c_hub",
+            "metadata": {
+                "entities": [{"norm": "hub", "type": "ORG"}],
+                "relations": [],
+            },
+        },
+        {
+            "chunk_id": "c_rare",
+            "metadata": {
+                "entities": [{"norm": "rare", "type": "ORG"}],
+                "relations": [],
+            },
+        },
+    ]
+    graph = build_graph(chunks)
+    strategy = GraphStrategy(
+        graph_store=_GraphStoreStub(graph=graph),
+        corpus=_CorpusStub({"c_hub": "Hub chunk", "c_rare": "Rare chunk"}),
+        generator=_GeneratorStub(),
+        entity_extractor=_StaticExtractor(["hub", "rare"]),
+        top_k=2,
+        max_hops=1,
+        entity_df_by_norm={"hub": 10000, "rare": 0},
+        synergy_gamma=0.0,
+    )
+
+    result = strategy.retrieve_and_generate("hub rare query")
+    assert result.status == "OK"
+    assert result.context_scores[0][0] == "Rare chunk"
+
+
+def test_graph_strategy_synergy_bonus_prefers_joint_evidence():
+    chunks = [
+        {
+            "chunk_id": "c_joint",
+            "metadata": {
+                "entities": [{"norm": "a", "type": "ORG"}, {"norm": "b", "type": "ORG"}],
+                "relations": [],
+            },
+        },
+        {
+            "chunk_id": "c_a",
+            "metadata": {
+                "entities": [{"norm": "a", "type": "ORG"}],
+                "relations": [],
+            },
+        },
+        {
+            "chunk_id": "c_b",
+            "metadata": {
+                "entities": [{"norm": "b", "type": "ORG"}],
+                "relations": [],
+            },
+        },
+    ]
+    graph = build_graph(chunks)
+    strategy = GraphStrategy(
+        graph_store=_GraphStoreStub(graph=graph),
+        corpus=_CorpusStub({"c_joint": "Joint", "c_a": "Only A", "c_b": "Only B"}),
+        generator=_GeneratorStub(),
+        entity_extractor=_StaticExtractor(["a", "b"]),
+        top_k=3,
+        max_hops=1,
+        entity_df_by_norm={"a": 0, "b": 0},
+        start_entity_weight=1.0,
+        expanded_entity_weight=0.0,
+        synergy_gamma=1.0,
+    )
+
+    result = strategy.retrieve_and_generate("a b query")
+    assert result.status == "OK"
+    assert result.context_scores[0][0] == "Joint"

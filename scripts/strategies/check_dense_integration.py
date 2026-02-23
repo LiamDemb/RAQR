@@ -61,7 +61,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--output-dir",
-        default=os.getenv("OUTPUT_DIR", "data/processed_rebel"),
+        default=os.getenv("OUTPUT_DIR", "data/processed"),
         help="Directory containing corpus.jsonl, vector_index.faiss, vector_meta.parquet.",
     )
     parser.add_argument(
@@ -159,7 +159,7 @@ if __name__ == "__main__":
 """
 poetry run python scripts/strategies/check_dense_integration.py \
   --query "Who stars in The Walking Dead season 8?" \
-  --output-dir data/processed_rebel \
+  --output-dir data/processed \
   --model-name all-MiniLM-L6-v2 \
   --top-k 10 \
   --show-contexts 3

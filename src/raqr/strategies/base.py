@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Dict, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 class BaseStrategy(ABC):
     name: str # "Dense", "Temporal", "Graph"
 
     @abstractmethod
-    def retrieve_and_generate(self, query: str) -> StrategyResult:
-        """ Run retrieval (and generation) for a single query """
+    def retrieve_and_generate(self, query: str, **kwargs) -> StrategyResult:
+        """Run retrieval (and generation) for a single query.
+
+        Implementations may accept optional kwargs for debugging or tracing.
+        """
         raise NotImplementedError
 
 @dataclass
@@ -19,6 +22,7 @@ class StrategyResult:
     latency_ms: Dict[str, float]
     status: Literal["OK", "NO_CONTEXT", "ERROR"]
     error: Optional[str] = None
+    debug_info: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         # Sorting context scores in descending order of score

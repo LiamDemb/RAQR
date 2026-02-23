@@ -22,12 +22,18 @@ def _check(condition: bool, name: str) -> bool:
     return condition
 
 
-def _build_strategy(output_dir: str, top_k: int) -> GraphStrategy:
+def _build_strategy(output_dir: str, top_k: int, max_hops: int) -> GraphStrategy:
     corpus_path = f"{output_dir}/corpus.jsonl"
     graph_path = f"{output_dir}/graph.pkl"
     lexicon_path = f"{output_dir}/entity_lexicon.parquet"
+    alias_map_path = f"{output_dir}/alias_map.json"
 
-    alias_resolver = EntityAliasResolver.from_lexicon(lexicon_path=lexicon_path)
+    if not os.path.exists(alias_map_path):
+        raise FileNotFoundError(
+            f"Required artifact missing: {alias_map_path}. Rebuild corpus with Phase 1 pipeline."
+        )
+    alias_resolver = EntityAliasResolver.from_artifacts(output_dir=output_dir)
+    entity_df_by_norm = EntityAliasResolver.load_df_map_from_lexicon(lexicon_path=lexicon_path)
     return GraphStrategy(
         graph_store=NetworkXGraphStore(graph_path=graph_path),
         corpus=JsonCorpusLoader(jsonl_path=corpus_path),
@@ -40,7 +46,8 @@ def _build_strategy(output_dir: str, top_k: int) -> GraphStrategy:
         ),
         entity_extractor=SpacyQueryEntityExtractor(alias_resolver=alias_resolver),
         top_k=top_k,
-        max_hops=1,
+        max_hops=max_hops,
+        entity_df_by_norm=entity_df_by_norm,
     )
 
 
@@ -54,7 +61,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--output-dir",
-        default=os.getenv("OUTPUT_DIR", "data/processed_rebel"),
+        default=os.getenv("OUTPUT_DIR", "data/processed"),
         help="Directory containing corpus.jsonl, graph.pkl, entity_lexicon.parquet.",
     )
     parser.add_argument(
@@ -69,17 +76,25 @@ def main() -> int:
         default=3,
         help="How many retrieved contexts to print.",
     )
+    parser.add_argument(
+        "--max-hops",
+        type=int,
+        default=int(os.getenv("GRAPH_MAX_HOPS", "1")),
+        help="Maximum graph traversal depth for relation expansion.",
+    )
     args = parser.parse_args()
 
     artifact_paths = [
         Path(args.output_dir) / "corpus.jsonl",
         Path(args.output_dir) / "graph.pkl",
         Path(args.output_dir) / "entity_lexicon.parquet",
+        Path(args.output_dir) / "alias_map.json",
     ]
 
     print("Graph integration check")
     print(f"- output_dir: {args.output_dir}")
     print(f"- top_k: {args.top_k}")
+    print(f"- max_hops: {args.max_hops}")
     print(f"- query: {args.query}")
     print("")
 
@@ -97,7 +112,11 @@ def main() -> int:
         print("\nIntegration check aborted due to missing prerequisites.")
         return 1
 
-    strategy = _build_strategy(output_dir=args.output_dir, top_k=args.top_k)
+    strategy = _build_strategy(
+        output_dir=args.output_dir,
+        top_k=args.top_k,
+        max_hops=args.max_hops,
+    )
     result = strategy.retrieve_and_generate(args.query)
 
     print("")

@@ -37,7 +37,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--output-dir",
-        default=os.getenv("OUTPUT_DIR", "data/processed_rebel"),
+        default=os.getenv("OUTPUT_DIR", "data/processed"),
         help="Directory containing graph.pkl and entity_lexicon.parquet.",
     )
     parser.add_argument(
@@ -50,8 +50,13 @@ def main() -> int:
 
     graph_path = f"{args.output_dir}/graph.pkl"
     lexicon_path = f"{args.output_dir}/entity_lexicon.parquet"
+    alias_map_path = f"{args.output_dir}/alias_map.json"
+    if not os.path.exists(alias_map_path):
+        raise FileNotFoundError(
+            f"Required artifact missing: {alias_map_path}. Rebuild corpus with Phase 1 pipeline."
+        )
     graph = NetworkXGraphStore(graph_path=graph_path).load()
-    alias_resolver = EntityAliasResolver.from_lexicon(lexicon_path=lexicon_path)
+    alias_resolver = EntityAliasResolver.from_artifacts(output_dir=args.output_dir)
     extractor = SpacyQueryEntityExtractor(alias_resolver=alias_resolver)
 
     total_queries = 0

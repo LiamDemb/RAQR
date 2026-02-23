@@ -28,7 +28,7 @@ class DenseStrategy(BaseStrategy):
         if self._index is None:
             self._index = self.index_store.load()
 
-    def retrieve_and_generate(self, query: str) -> StrategyResult:
+    def retrieve_and_generate(self, query: str, **kwargs) -> StrategyResult:
         t0 = time.perf_counter()
         timings: Dict[str, float] = {}
         stage = "retrieval"

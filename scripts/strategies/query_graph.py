@@ -16,10 +16,11 @@ from raqr.strategies.graph import GraphStrategy, SpacyQueryEntityExtractor
 
 def main() -> int:
     load_dotenv()
-    output_dir = os.getenv("OUTPUT_DIR", "data/processed_rebel")
+    output_dir = os.getenv("OUTPUT_DIR", "data/processed")
     corpus_path = f"{output_dir}/corpus.jsonl"
     graph_path = f"{output_dir}/graph.pkl"
     lexicon_path = f"{output_dir}/entity_lexicon.parquet"
+    alias_map_path = f"{output_dir}/alias_map.json"
 
     parser = argparse.ArgumentParser(description="Run one query using GraphStrategy.")
     parser.add_argument("query", help="The question to ask the GraphStrategy pipeline.")
@@ -35,9 +36,21 @@ def main() -> int:
         default=5,
         help="How many retrieved contexts to print.",
     )
+    parser.add_argument(
+        "--max-hops",
+        type=int,
+        default=int(os.getenv("GRAPH_MAX_HOPS", "1")),
+        help="Maximum graph traversal depth for relation expansion.",
+    )
     args = parser.parse_args()
 
-    alias_resolver = EntityAliasResolver.from_lexicon(lexicon_path=lexicon_path)
+    if not os.path.exists(alias_map_path):
+        raise FileNotFoundError(
+            f"Required artifact missing: {alias_map_path}. Rebuild corpus with Phase 1 pipeline."
+        )
+
+    alias_resolver = EntityAliasResolver.from_artifacts(output_dir=output_dir)
+    entity_df_by_norm = EntityAliasResolver.load_df_map_from_lexicon(lexicon_path=lexicon_path)
     strategy = GraphStrategy(
         graph_store=NetworkXGraphStore(graph_path=graph_path),
         corpus=JsonCorpusLoader(jsonl_path=corpus_path),
@@ -50,7 +63,8 @@ def main() -> int:
         ),
         entity_extractor=SpacyQueryEntityExtractor(alias_resolver=alias_resolver),
         top_k=args.top_k,
-        max_hops=1,
+        max_hops=args.max_hops,
+        entity_df_by_norm=entity_df_by_norm,
     )
 
     result = strategy.retrieve_and_generate(args.query)

@@ -4,7 +4,7 @@ import argparse
 from dotenv import load_dotenv
 load_dotenv()
 
-output_dir = os.getenv("OUTPUT_DIR", "data/processed_rebel")
+output_dir = os.getenv("OUTPUT_DIR", "data/processed")
 corpus_path = f"{output_dir}/corpus.jsonl"
 index_path = f"{output_dir}/vector_index.faiss"
 meta_path = f"{output_dir}/vector_meta.parquet"
