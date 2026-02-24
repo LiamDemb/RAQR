@@ -240,7 +240,7 @@ The codebase is organized to run in **4 sequential stages**:
 - **Action:**
     1.  Loops through the Benchmark Dataset.
     2.  Runs **ALL 3** strategies for every question.
-    3.  Evaluates answers using `F1 Score` vs Gold Answer.
+    3.  Evaluates answers using **LLM-as-judge** for semantic correctness.
     4.  Selects the winner using a **margin-based simplicity bias** rule (\(\delta\)) with deterministic tie-break: **Dense > Temporal > Graph**.
 - **Artifacts:** `data/training/labeled_train.jsonl`, `data/training/labeled_dev.jsonl` (This is your training data).
 

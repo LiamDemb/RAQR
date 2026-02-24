@@ -1,4 +1,4 @@
-.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple
+.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple eval-strategies mock-oracle
 
 -include .env
 
@@ -50,3 +50,14 @@ build-corpus-simple:
 		--re-batch-size 1 \
 		--re-max-input-chars 600 \
 		--re-max-new-tokens 64
+
+eval-strategies:
+	poetry run python scripts/dev/evaluate_strategies.py \
+		--benchmark "$(BENCHMARK_PATH)" \
+		--output-dir "$(OUTPUT_DIR)" \
+		--use-llm-judge
+
+mock-oracle:
+	poetry run python scripts/dev/mock_oracle_eval.py \
+		--benchmark "$(BENCHMARK_PATH)" \
+		--output-dir "$(OUTPUT_DIR)"
