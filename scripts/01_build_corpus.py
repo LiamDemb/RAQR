@@ -18,7 +18,11 @@ from raqr.data.chunking import chunk_blocks
 from raqr.data.corpus_acquisition import Budgets, ingest_complextempqa, ingest_nq, ingest_wikiwhy
 from raqr.data.corpus_schemas import CorpusChunk
 from raqr.data.docstore import DocStore
-from raqr.data.enrich_entities import extract_entities_spacy, load_spacy
+from raqr.data.enrich_entities import (
+    extract_entities_spacy,
+    load_spacy,
+    should_use_noun_chunks,
+)
 from raqr.data.enrich_relations import extract_relations_rebel, load_rebel
 from raqr.data.enrich_years import aggregate_year_fields, extract_years
 from raqr.data.entity_lexicon import build_entity_lexicon
@@ -225,7 +229,8 @@ def main() -> int:
         for doc in docs:
             all_docs[doc.doc_key] = doc
 
-    nlp = load_spacy()
+    noun_chunks_enabled = should_use_noun_chunks()
+    nlp = load_spacy(use_noun_chunks=noun_chunks_enabled)
     alias_map_redirects = build_alias_map_from_redirects(
         titles=[doc.title for doc in all_docs.values() if doc.title],
         wiki=wiki,
@@ -258,7 +263,12 @@ def main() -> int:
         for idx, piece in enumerate(chunk_blocks(structured.blocks)):
             years = extract_years(piece.text)
             year_fields = aggregate_year_fields(years, piece.text, piece.token_count)
-            entities = extract_entities_spacy(piece.text, nlp, alias_map)
+            entities = extract_entities_spacy(
+                piece.text,
+                nlp,
+                alias_map,
+                use_noun_chunks=noun_chunks_enabled,
+            )
             metadata = {
                 "dataset_origin": structured.dataset_origin,
                 "page_id": structured.page_id,

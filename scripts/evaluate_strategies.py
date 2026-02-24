@@ -1,7 +1,8 @@
 """Evaluate Dense and Graph strategies on the benchmark.
 
 Runs each question through both strategies, compares predicted answers to gold,
-and reports EM, F1, correct counts, and per-source breakdown.
+and reports F1 (primary), EM, and per-source breakdown. Uses token-level F1
+as the main metric for head-to-head comparison.
 """
 
 from __future__ import annotations
@@ -106,6 +107,7 @@ def _build_dense_strategy(output_dir: str):
             model_id=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             base_prompt=(
                 "Answer the question based only on the provided context. "
+                "Give a concise, direct answer. "
                 "If the context does not contain the answer, say so."
             ),
         ),
@@ -140,6 +142,7 @@ def _build_graph_strategy(output_dir: str):
             model_id=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             base_prompt=(
                 "Answer the question based only on the provided context. "
+                "Give a concise, direct answer. "
                 "If the context does not contain the answer, say so."
             ),
         ),
@@ -255,11 +258,11 @@ def main() -> int:
                 return s[:n] + "..." if len(s) > n else s
             print(f"[{idx + 1}] {_trunc(question)}")
             print(f"  Gold: {_trunc(gold_list[0])}")
-            print(f"  Dense: {'✓' if em_dense else '✗'} {_trunc(pred_dense)}")
-            print(f"  Graph: {'✓' if em_graph else '✗'} {_trunc(pred_graph)}")
+            print(f"  Dense: EM={'✓' if em_dense else '✗'} F1={f1_dense:.3f} {_trunc(pred_dense)}")
+            print(f"  Graph: EM={'✓' if em_graph else '✗'} F1={f1_graph:.3f} {_trunc(pred_graph)}")
             print()
 
-    # Print summary
+    # Print summary (F1 primary, EM secondary)
     def _print_strategy(name: str, res: dict):
         print(f"\n{'='*60}")
         print(f"  {name}")
@@ -271,40 +274,40 @@ def main() -> int:
             n = r["total"]
             if n == 0:
                 continue
-            em_pct = 100 * r["em"] / n
             f1_avg = r["f1"] / n
-            print(f"  {key}: {r['correct']}/{n} correct (EM: {em_pct:.1f}%, F1: {f1_avg:.3f})")
+            em_pct = 100 * r["em"] / n
+            print(f"  {key}: F1={f1_avg:.3f}, EM={r['correct']}/{n} ({em_pct:.1f}%)")
         r_all = res["_all"]
         n_all = r_all["total"]
-        em_pct = 100 * r_all["em"] / n_all
         f1_avg = r_all["f1"] / n_all
+        em_pct = 100 * r_all["em"] / n_all
         print(f"  ---")
-        print(f"  OVERALL: {r_all['correct']}/{n_all} correct (EM: {em_pct:.1f}%, F1: {f1_avg:.3f})")
+        print(f"  OVERALL: F1={f1_avg:.3f}, EM={r_all['correct']}/{n_all} ({em_pct:.1f}%)")
 
     _print_strategy("Dense", results_dense)
     _print_strategy("Graph", results_graph)
 
     t_total_sec = time.perf_counter() - t_start
 
-    # Head-to-head
+    # Head-to-head (F1 primary)
     n = results_dense["_all"]["total"]
-    d_em = results_dense["_all"]["em"]
-    g_em = results_graph["_all"]["em"]
     d_f1 = results_dense["_all"]["f1"] / n
     g_f1 = results_graph["_all"]["f1"] / n
+    d_em = results_dense["_all"]["em"]
+    g_em = results_graph["_all"]["em"]
     print("\n" + "=" * 60)
     print("  Summary")
     print("=" * 60)
-    print(f"  Dense correct (EM): {d_em}  |  Graph correct (EM): {g_em}")
+    print(f"  Dense F1: {d_f1:.3f}  |  Graph F1: {g_f1:.3f}")
+    print(f"  Dense EM: {d_em}/{n}  |  Graph EM: {g_em}/{n}")
     print(f"  Dense time: {time_dense_sec:.1f}s  |  Graph time: {time_graph_sec:.1f}s")
     print(f"  Total elapsed: {t_total_sec:.1f}s")
-    print(f"  Dense F1: {d_f1:.3f}  |  Graph F1: {g_f1:.3f}")
-    if d_em > g_em:
-        print("  → Dense has higher EM")
-    elif g_em > d_em:
-        print("  → Graph has higher EM")
+    if d_f1 > g_f1:
+        print("  → Dense has higher F1")
+    elif g_f1 > d_f1:
+        print("  → Graph has higher F1")
     else:
-        print("  → Tie on EM")
+        print("  → Tie on F1")
     print()
     return 0
 

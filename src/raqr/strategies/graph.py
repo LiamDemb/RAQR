@@ -14,7 +14,11 @@ from raqr.generator import Generator
 from raqr.graph_store import NetworkXGraphStore
 from raqr.loaders import ChunkIdToText
 from raqr.strategies.base import BaseStrategy, StrategyResult
-from raqr.data.enrich_entities import extract_entities_spacy, load_spacy
+from raqr.data.enrich_entities import (
+    extract_entities_spacy,
+    load_spacy,
+    should_use_noun_chunks,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -31,11 +35,15 @@ class SpacyQueryEntityExtractor:
 
     alias_resolver: EntityAliasResolver
     spacy_model: str = os.getenv("SPACY_MODEL", "en_core_web_sm")
+    use_noun_chunks: Optional[bool] = None
     _nlp: Optional[object] = None
 
     def _ensure_loaded(self) -> None:
         if self._nlp is None:
-            self._nlp = load_spacy(self.spacy_model)
+            self._nlp = load_spacy(
+                self.spacy_model,
+                use_noun_chunks=should_use_noun_chunks(self.use_noun_chunks),
+            )
 
     def extract(self, query: str) -> List[str]:
         self._ensure_loaded()
@@ -43,6 +51,7 @@ class SpacyQueryEntityExtractor:
             text=query,
             nlp=self._nlp,
             alias_map=self.alias_resolver.alias_map,
+            use_noun_chunks=should_use_noun_chunks(self.use_noun_chunks),
         )
         return sorted({ent["norm"] for ent in entities if ent.get("norm")})
 

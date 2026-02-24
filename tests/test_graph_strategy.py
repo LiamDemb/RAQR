@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from raqr.data.build_graph import build_graph
+from raqr.entity_alias_resolver import EntityAliasResolver
 from raqr.generator import GenerationResult
 from raqr.strategies.base import StrategyResult
-from raqr.strategies.graph import GraphStrategy
+from raqr.strategies.graph import GraphStrategy, SpacyQueryEntityExtractor
 
 
 @dataclass
@@ -198,3 +199,66 @@ def test_graph_strategy_synergy_bonus_prefers_joint_evidence():
     result = strategy.retrieve_and_generate("a b query")
     assert result.status == "OK"
     assert result.context_scores[0][0] == "Joint"
+
+
+def test_spacy_query_extractor_can_match_via_noun_chunks(monkeypatch):
+    class _Token:
+        def __init__(self, text: str, *, is_stop: bool = False, pos_: str = "NOUN"):
+            self.text = text
+            self.is_stop = is_stop
+            self.pos_ = pos_
+            self.is_alpha = text.isalpha()
+
+    class _Span:
+        def __init__(self, text: str, label_: str = "", tokens: Optional[List[_Token]] = None):
+            self.text = text
+            self.label_ = label_
+            self._tokens = tokens or []
+
+        def __iter__(self):
+            return iter(self._tokens)
+
+        def __len__(self):
+            return len(self._tokens)
+
+    class _Doc:
+        ents = []
+        noun_chunks = [
+            _Span(
+                "The United States",
+                tokens=[
+                    _Token("The", is_stop=True, pos_="DET"),
+                    _Token("United"),
+                    _Token("States"),
+                ],
+            )
+        ]
+
+    class _NlpStub:
+        def __call__(self, text: str):
+            return _Doc()
+
+    monkeypatch.setattr("raqr.strategies.graph.load_spacy", lambda *args, **kwargs: _NlpStub())
+
+    chunks = [
+        {
+            "chunk_id": "c_us",
+            "metadata": {"entities": [{"norm": "united states", "type": "GPE"}], "relations": []},
+        }
+    ]
+    graph = build_graph(chunks)
+    extractor = SpacyQueryEntityExtractor(
+        alias_resolver=EntityAliasResolver(alias_map={}),
+        use_noun_chunks=True,
+    )
+    strategy = GraphStrategy(
+        graph_store=_GraphStoreStub(graph=graph),
+        corpus=_CorpusStub({"c_us": "United States context."}),
+        generator=_GeneratorStub(),
+        entity_extractor=extractor,
+        top_k=1,
+        max_hops=1,
+    )
+
+    result = strategy.retrieve_and_generate("What happened in the United States?")
+    assert result.status == "OK"
