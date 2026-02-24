@@ -1,7 +1,7 @@
-"""Mock-oracle evaluation: one winner per question (highest judge score; Dense wins ties).
+"""Mock-oracle evaluation: one winner per question (highest judge score; Dense > Temporal > Graph ties).
 
-Evaluates Dense and Graph on the benchmark using LLM-as-judge (0/1/2). For each
-question, the strategy with the higher judge score wins; ties go to Dense.
+Evaluates Dense, Temporal, and Graph on the benchmark using LLM-as-judge (0/1/2). For each
+question, the strategy with the higher judge score wins; ties go to Dense > Temporal > Graph.
 Reports score breakdown (0/1/2), correct (2) counts, total wins, wins by source,
 and score breakdown per strategy per source.
 """
@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -25,13 +26,16 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parent))
 from _common import (
     build_dense_strategy,
     build_graph_strategy,
+    build_temporal_strategy,
     normalize_gold_answers,
 )
+
+TIE_ORDER = ["Dense", "Temporal", "Graph"]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Mock-oracle eval: one winner per question (highest judge score; Dense wins ties).",
+        description="Mock-oracle eval: one winner per question (highest judge score; Dense > Temporal > Graph ties).",
     )
     parser.add_argument(
         "--benchmark",
@@ -83,24 +87,31 @@ def main() -> int:
 
     print("Building strategies...")
     dense = build_dense_strategy(args.output_dir)
+    temporal = build_temporal_strategy(args.output_dir)
     graph = build_graph_strategy(args.output_dir)
     judge = LLMJudge()
-    print("Mock Oracle Evaluation (Judge 0/1/2, Dense wins ties)")
+    print("Mock Oracle Evaluation (Judge 0/1/2, Dense > Temporal > Graph ties)")
     print("=" * 60)
     print(f"Total: {len(samples)} questions\n")
 
+    start_time = time.perf_counter()
+
     # Per-strategy: score counts (0,1,2), correct (2), wins
     dense_scores: dict[int, int] = {0: 0, 1: 0, 2: 0}
+    temporal_scores: dict[int, int] = {0: 0, 1: 0, 2: 0}
     graph_scores: dict[int, int] = {0: 0, 1: 0, 2: 0}
     dense_wins = 0
+    temporal_wins = 0
     graph_wins = 0
-    # Per source: total, dense_wins, graph_wins, dense_scores, graph_scores
+    # Per source: total, wins, scores for each strategy
     def _source_entry() -> dict:
         return {
             "total": 0,
             "dense_wins": 0,
+            "temporal_wins": 0,
             "graph_wins": 0,
             "dense_scores": {0: 0, 1: 0, 2: 0},
+            "temporal_scores": {0: 0, 1: 0, 2: 0},
             "graph_scores": {0: 0, 1: 0, 2: 0},
         }
 
@@ -116,49 +127,61 @@ def main() -> int:
             continue
 
         r_dense = dense.retrieve_and_generate(question)
+        r_temporal = temporal.retrieve_and_generate(question)
         r_graph = graph.retrieve_and_generate(question)
         pred_dense = r_dense.answer or ""
+        pred_temporal = r_temporal.answer or ""
         pred_graph = r_graph.answer or ""
 
         score_dense = judge.judge(question, gold_list, pred_dense)
+        score_temporal = judge.judge(question, gold_list, pred_temporal)
         score_graph = judge.judge(question, gold_list, pred_graph)
 
         dense_scores[score_dense] += 1
+        temporal_scores[score_temporal] += 1
         graph_scores[score_graph] += 1
         by_source[source]["total"] += 1
         by_source[source]["dense_scores"][score_dense] += 1
+        by_source[source]["temporal_scores"][score_temporal] += 1
         by_source[source]["graph_scores"][score_graph] += 1
 
-        # Winner: higher score wins; tie -> Dense
-        if score_dense >= score_graph:
+        # Winner: higher score wins; tie -> Dense > Temporal > Graph
+        scores = {"Dense": score_dense, "Temporal": score_temporal, "Graph": score_graph}
+        winner = max(TIE_ORDER, key=lambda s: (scores[s], -TIE_ORDER.index(s)))
+        if winner == "Dense":
             dense_wins += 1
             by_source[source]["dense_wins"] += 1
-            winner = "Dense"
+        elif winner == "Temporal":
+            temporal_wins += 1
+            by_source[source]["temporal_wins"] += 1
         else:
             graph_wins += 1
             by_source[source]["graph_wins"] += 1
-            winner = "Graph"
 
         if args.verbose:
             def _trunc(s: str, n: int = 50) -> str:
                 return s[:n] + "..." if len(s) > n else s
-            print(f"[{idx + 1}] {_trunc(question)} | D={score_dense} G={score_graph} → {winner}")
+            print(f"[{idx + 1}] {_trunc(question)} | D={score_dense} T={score_temporal} G={score_graph} → {winner}")
 
     n = sum(by_source[s]["total"] for s in by_source)
+    elapsed = time.perf_counter() - start_time
 
     # Score breakdown
     print("Score breakdown (0=incorrect, 1=partial, 2=correct):")
     d_correct = dense_scores[2]
+    t_correct = temporal_scores[2]
     g_correct = graph_scores[2]
     d_pct = 100 * d_correct / n if n else 0
+    t_pct = 100 * t_correct / n if n else 0
     g_pct = 100 * g_correct / n if n else 0
-    print(f"  Dense:  0={dense_scores[0]:3d}  1={dense_scores[1]:3d}  2={dense_scores[2]:3d}  → Correct: {d_correct}/{n} ({d_pct:.1f}%)")
-    print(f"  Graph:  0={graph_scores[0]:3d}  1={graph_scores[1]:3d}  2={graph_scores[2]:3d}  → Correct: {g_correct}/{n} ({g_pct:.1f}%)")
+    print(f"  Dense:    0={dense_scores[0]:3d}  1={dense_scores[1]:3d}  2={dense_scores[2]:3d}  → Correct: {d_correct}/{n} ({d_pct:.1f}%)")
+    print(f"  Temporal: 0={temporal_scores[0]:3d}  1={temporal_scores[1]:3d}  2={temporal_scores[2]:3d}  → Correct: {t_correct}/{n} ({t_pct:.1f}%)")
+    print(f"  Graph:   0={graph_scores[0]:3d}  1={graph_scores[1]:3d}  2={graph_scores[2]:3d}  → Correct: {g_correct}/{n} ({g_pct:.1f}%)")
     print()
 
     # Wins
-    print("Wins (highest score; tie → Dense):")
-    print(f"  Dense: {dense_wins}   Graph: {graph_wins}")
+    print("Wins (highest score; tie → Dense > Temporal > Graph):")
+    print(f"  Dense: {dense_wins}   Temporal: {temporal_wins}   Graph: {graph_wins}")
     print()
 
     # Score breakdown by source (0, 1, 2 per strategy per source)
@@ -167,12 +190,15 @@ def main() -> int:
         r = by_source[key]
         t = r["total"]
         ds = r["dense_scores"]
+        ts = r["temporal_scores"]
         gs = r["graph_scores"]
         d_pct = 100 * ds[2] / t if t else 0
+        t_pct = 100 * ts[2] / t if t else 0
         g_pct = 100 * gs[2] / t if t else 0
         print(f"  {key}:")
-        print(f"    Dense:  0={ds[0]:3d}  1={ds[1]:3d}  2={ds[2]:3d}  → Correct: {ds[2]}/{t} ({d_pct:.1f}%)")
-        print(f"    Graph:  0={gs[0]:3d}  1={gs[1]:3d}  2={gs[2]:3d}  → Correct: {gs[2]}/{t} ({g_pct:.1f}%)")
+        print(f"    Dense:    0={ds[0]:3d}  1={ds[1]:3d}  2={ds[2]:3d}  → Correct: {ds[2]}/{t} ({d_pct:.1f}%)")
+        print(f"    Temporal: 0={ts[0]:3d}  1={ts[1]:3d}  2={ts[2]:3d}  → Correct: {ts[2]}/{t} ({t_pct:.1f}%)")
+        print(f"    Graph:    0={gs[0]:3d}  1={gs[1]:3d}  2={gs[2]:3d}  → Correct: {gs[2]}/{t} ({g_pct:.1f}%)")
     print()
 
     # Wins by source
@@ -181,9 +207,12 @@ def main() -> int:
         r = by_source[key]
         t = r["total"]
         dw = r["dense_wins"]
+        tw = r["temporal_wins"]
         gw = r["graph_wins"]
-        print(f"  {key:20s}  Dense {dw}/{t}   Graph {gw}/{t}")
+        print(f"  {key:20s}  Dense {dw}/{t}   Temporal {tw}/{t}   Graph {gw}/{t}")
     print()
+
+    print(f"Total time: {elapsed:.1f}s")
     return 0
 
 

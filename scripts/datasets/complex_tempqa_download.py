@@ -44,7 +44,7 @@ def main(num_samples, output_file):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--num_samples", type=int, default=300)
+    p.add_argument("--num_samples", type=int, default=500)
     p.add_argument("--output_file", type=str, default="complex_tempqa_subset.jsonl")
     args = p.parse_args()
     main(args.num_samples, args.output_file)

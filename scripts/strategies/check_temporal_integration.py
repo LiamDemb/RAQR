@@ -73,7 +73,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--output-dir",
-        default=os.getenv("OUTPUT_DIR", "data/processed_rebel"),
+        default=os.getenv("OUTPUT_DIR", "data/processed"),
         help="Directory containing corpus.jsonl, vector_index.faiss, vector_meta.parquet.",
     )
     parser.add_argument(

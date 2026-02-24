@@ -106,7 +106,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="Evaluate Dense vs Temporal on ComplexTempQA JSONL.")
     parser.add_argument("--dataset", default="data/raw/complex_tempqa_50.jsonl")
-    parser.add_argument("--output-dir", default=os.getenv("OUTPUT_DIR", "data/processed_rebel"))
+    parser.add_argument("--output-dir", default=os.getenv("OUTPUT_DIR", "data/processed"))
     parser.add_argument("--model-name", default=os.getenv("MODEL_NAME", "all-MiniLM-L6-v2"))
     parser.add_argument("--openai-model", default=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
     parser.add_argument("--limit", type=int, default=None, help="Evaluate only first N rows.")

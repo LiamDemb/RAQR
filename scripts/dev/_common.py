@@ -58,6 +58,33 @@ def build_dense_strategy(output_dir: str):
     )
 
 
+def build_temporal_strategy(output_dir: str):
+    """Build TemporalStrategy with corpus, index (with year metadata), embedder, generator."""
+    from raqr.embedder import SentenceTransformersEmbedder
+    from raqr.generator import SimpleLLMGenerator
+    from raqr.index_store import FaissIndexStore
+    from raqr.loaders import JsonCorpusLoader, VectorMetaWithYears
+    from raqr.strategies.temporal import TemporalStrategy
+
+    corpus_path = f"{output_dir}/corpus.jsonl"
+    index_path = f"{output_dir}/vector_index.faiss"
+    meta_path = f"{output_dir}/vector_meta.parquet"
+    return TemporalStrategy(
+        index_store=FaissIndexStore(index_path=index_path),
+        meta=VectorMetaWithYears(parquet_path=meta_path),
+        embedder=SentenceTransformersEmbedder(model_name="all-MiniLM-L6-v2"),
+        generator=SimpleLLMGenerator(
+            model_id=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            base_prompt=BASE_PROMPT,
+        ),
+        corpus=JsonCorpusLoader(jsonl_path=corpus_path),
+        top_k=int(os.getenv("TEMPORAL_TOP_K", "5")),
+        candidate_multiplier=int(os.getenv("TEMPORAL_CANDIDATE_MULTIPLIER", "5")),
+        alpha=float(os.getenv("TEMPORAL_ALPHA", "0.6")),
+        beta=float(os.getenv("TEMPORAL_BETA", "0.4")),
+    )
+
+
 def build_graph_strategy(output_dir: str):
     """Build GraphStrategy with corpus, graph, generator, entity extractor."""
     from raqr.entity_alias_resolver import EntityAliasResolver
