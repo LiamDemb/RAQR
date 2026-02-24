@@ -387,6 +387,11 @@ def extract_years(text, max_range_expand=15):
 
 * Run spaCy NER over **chunk text** (and later over queries at retrieval time).
 * Keep entity types: `PERSON`, `ORG`, `GPE`, `LOC`, `WORK_OF_ART`, `EVENT` (configurable).
+* For high-recall GraphRAG, optionally augment with noun chunks (`doc.noun_chunks`) using deterministic filters:
+  * `NOUN_CHUNK_MAX_TOKENS` (default 5),
+  * `NOUN_CHUNK_STOPWORD_RATIO_MAX` (default 0.6),
+  * edge trimming for stopwords/determiners before normalization.
+* Apply the same extraction policy at query-time to reduce ingestion/query mismatch.
 
 #### 5.2.2 Relation Extraction (Semantic Triples)
 

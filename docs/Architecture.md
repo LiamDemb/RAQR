@@ -186,7 +186,7 @@ Responsible for ingesting datasets and normalizing them into a standard schema.
 Each strategy class inherits from `BaseStrategy`. There are **3** concrete implementations.
 
 1.  **`DenseStrategy`:** Custom FAISS indexing (`FaissIndexStore`) + `SentenceTransformersEmbedder`; maps row IDs to chunk texts via `vector_meta.parquet`.
-2.  **`GraphStrategy`:** Relation-aware traversal using **predicate edges** (Subject-Predicate-Object triples) and **provenance edges** (Entity $\rightarrow$ Chunk). Entity & relation extraction $\rightarrow$ `NetworkX` triple traversal (1-hop) $\rightarrow$ resolve to evidence chunks via provenance edges.
+2.  **`GraphStrategy`:** Relation-aware traversal using **predicate edges** (Subject-Predicate-Object triples) and **provenance edges** (Entity $\rightarrow$ Chunk). Query entity extraction uses the same normalization policy as ingestion (NER + optional noun-chunk augmentation), then `NetworkX` triple traversal (1-hop) resolves evidence chunks via provenance edges.
 3.  **`TemporalStrategy`:** FAISS candidate pool (vector search) + explicit year metadata filter. Date extraction (Regex/LLM) $\rightarrow$ retrieve deeper candidate set $\rightarrow$ filter by `year` metadata (refill from deeper ranks until \(k\) contexts). **No temporal KG;** Temporal RAG is metadata-filtered dense retrieval only.
 
 ### C. The Probe Module (`src/probe`)
