@@ -38,6 +38,7 @@
 3. `data/processed/vector_index.faiss` + `data/processed/vector_meta.parquet` — embeddings + metadata mapping (FAISS has no native metadata filtering, so store metadata externally).  
 4. `data/processed/graph.pkl` — NetworkX graph (Entity-Relation-Entity edges + Entity-Chunk provenance edges).  
 5. `data/processed/entity_lexicon.parquet` — canonical entity strings, aliases, and optional QIDs (used for normalization).
+6. `data/processed/alias_map.json` — deterministic redirect-mined alias artifact (`Dict[str, str]`, normalized alias -> normalized canonical) produced at corpus-build time and loaded by Phase 2 graph retrieval for consistent entity normalization.
 
 These artifacts align with the modular “offline prep vs online routing & inference” separation. 
 
@@ -386,6 +387,11 @@ def extract_years(text, max_range_expand=15):
 
 * Run spaCy NER over **chunk text** (and later over queries at retrieval time).
 * Keep entity types: `PERSON`, `ORG`, `GPE`, `LOC`, `WORK_OF_ART`, `EVENT` (configurable).
+* For high-recall GraphRAG, optionally augment with noun chunks (`doc.noun_chunks`) using deterministic filters:
+  * `NOUN_CHUNK_MAX_TOKENS` (default 5),
+  * `NOUN_CHUNK_STOPWORD_RATIO_MAX` (default 0.6),
+  * edge trimming for stopwords/determiners before normalization.
+* Apply the same extraction policy at query-time to reduce ingestion/query mismatch.
 
 #### 5.2.2 Relation Extraction (Semantic Triples)
 

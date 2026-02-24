@@ -1,11 +1,4 @@
-"""Run a real end-to-end integration check for DenseStrategy.
-
-This script validates that DenseStrategy can:
-1) load real artifacts,
-2) retrieve context from FAISS + corpus,
-3) call the real generator, and
-4) return a structurally valid StrategyResult.
-"""
+"""Run a real end-to-end integration check for GraphStrategy."""
 
 from __future__ import annotations
 
@@ -16,11 +9,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from raqr.embedder import SentenceTransformersEmbedder
+from raqr.entity_alias_resolver import EntityAliasResolver
 from raqr.generator import SimpleLLMGenerator
-from raqr.index_store import FaissIndexStore
-from raqr.loaders import JsonCorpusLoader, VectorMetaMapper
-from raqr.strategies.dense import DenseStrategy
+from raqr.graph_store import NetworkXGraphStore
+from raqr.loaders import JsonCorpusLoader
+from raqr.strategies.graph import GraphStrategy, SpacyQueryEntityExtractor
 
 
 def _check(condition: bool, name: str) -> bool:
@@ -29,15 +22,21 @@ def _check(condition: bool, name: str) -> bool:
     return condition
 
 
-def _build_strategy(output_dir: str, model_name: str, top_k: int) -> DenseStrategy:
+def _build_strategy(output_dir: str, top_k: int, max_hops: int) -> GraphStrategy:
     corpus_path = f"{output_dir}/corpus.jsonl"
-    index_path = f"{output_dir}/vector_index.faiss"
-    meta_path = f"{output_dir}/vector_meta.parquet"
+    graph_path = f"{output_dir}/graph.pkl"
+    lexicon_path = f"{output_dir}/entity_lexicon.parquet"
+    alias_map_path = f"{output_dir}/alias_map.json"
 
-    return DenseStrategy(
-        index_store=FaissIndexStore(index_path=index_path),
-        meta=VectorMetaMapper(parquet_path=meta_path),
-        embedder=SentenceTransformersEmbedder(model_name=model_name),
+    if not os.path.exists(alias_map_path):
+        raise FileNotFoundError(
+            f"Required artifact missing: {alias_map_path}. Rebuild corpus with Phase 1 pipeline."
+        )
+    alias_resolver = EntityAliasResolver.from_artifacts(output_dir=output_dir)
+    entity_df_by_norm = EntityAliasResolver.load_df_map_from_lexicon(lexicon_path=lexicon_path)
+    return GraphStrategy(
+        graph_store=NetworkXGraphStore(graph_path=graph_path),
+        corpus=JsonCorpusLoader(jsonl_path=corpus_path),
         generator=SimpleLLMGenerator(
             model_id=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             base_prompt=(
@@ -45,35 +44,31 @@ def _build_strategy(output_dir: str, model_name: str, top_k: int) -> DenseStrate
                 "If the context does not contain the answer, say so."
             ),
         ),
-        corpus=JsonCorpusLoader(jsonl_path=corpus_path),
+        entity_extractor=SpacyQueryEntityExtractor(alias_resolver=alias_resolver),
         top_k=top_k,
+        max_hops=max_hops,
+        entity_df_by_norm=entity_df_by_norm,
     )
 
 
 def main() -> int:
     load_dotenv()
-
-    parser = argparse.ArgumentParser(description="DenseStrategy integration check.")
+    parser = argparse.ArgumentParser(description="GraphStrategy integration check.")
     parser.add_argument(
         "--query",
-        default="Who stars in The Walking Dead season 8?",
-        help="Question to run through DenseStrategy.",
+        default="How is Barack Obama related to the United States?",
+        help="Question to run through GraphStrategy.",
     )
     parser.add_argument(
         "--output-dir",
         default=os.getenv("OUTPUT_DIR", "data/processed"),
-        help="Directory containing corpus.jsonl, vector_index.faiss, vector_meta.parquet.",
-    )
-    parser.add_argument(
-        "--model-name",
-        default=os.getenv("MODEL_NAME", "all-MiniLM-L6-v2"),
-        help="Embedding model used to query FAISS.",
+        help="Directory containing corpus.jsonl, graph.pkl, entity_lexicon.parquet.",
     )
     parser.add_argument(
         "--top-k",
         type=int,
-        default=int(os.getenv("DENSE_TOP_K", "10")),
-        help="Top-k retrieval for DenseStrategy.",
+        default=int(os.getenv("GRAPH_TOP_K", "10")),
+        help="Top-k retrieval for GraphStrategy.",
     )
     parser.add_argument(
         "--show-contexts",
@@ -81,25 +76,31 @@ def main() -> int:
         default=3,
         help="How many retrieved contexts to print.",
     )
+    parser.add_argument(
+        "--max-hops",
+        type=int,
+        default=int(os.getenv("GRAPH_MAX_HOPS", "1")),
+        help="Maximum graph traversal depth for relation expansion.",
+    )
     args = parser.parse_args()
 
-    output_dir = args.output_dir
     artifact_paths = [
-        Path(output_dir) / "corpus.jsonl",
-        Path(output_dir) / "vector_index.faiss",
-        Path(output_dir) / "vector_meta.parquet",
+        Path(args.output_dir) / "corpus.jsonl",
+        Path(args.output_dir) / "graph.pkl",
+        Path(args.output_dir) / "entity_lexicon.parquet",
+        Path(args.output_dir) / "alias_map.json",
     ]
 
-    print("Dense integration check")
-    print(f"- output_dir: {output_dir}")
-    print(f"- model_name: {args.model_name}")
+    print("Graph integration check")
+    print(f"- output_dir: {args.output_dir}")
     print(f"- top_k: {args.top_k}")
+    print(f"- max_hops: {args.max_hops}")
     print(f"- query: {args.query}")
     print("")
 
     all_ok = True
-    for p in artifact_paths:
-        all_ok &= _check(p.exists(), f"artifact exists: {p.as_posix()}")
+    for path in artifact_paths:
+        all_ok &= _check(path.exists(), f"artifact exists: {path.as_posix()}")
 
     if not os.getenv("OPENAI_API_KEY"):
         all_ok &= _check(False, "OPENAI_API_KEY is set")
@@ -112,11 +113,10 @@ def main() -> int:
         return 1
 
     strategy = _build_strategy(
-        output_dir=output_dir,
-        model_name=args.model_name,
+        output_dir=args.output_dir,
         top_k=args.top_k,
+        max_hops=args.max_hops,
     )
-
     result = strategy.retrieve_and_generate(args.query)
 
     print("")
@@ -146,21 +146,12 @@ def main() -> int:
 
     print("\nSummary")
     if all_ok:
-        print("Dense integration check PASSED.")
+        print("Graph integration check PASSED.")
         return 0
-
-    print("Dense integration check FAILED.")
+    print("Graph integration check FAILED.")
     return 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
 
-"""
-poetry run python scripts/strategies/check_dense_integration.py \
-  --query "Who stars in The Walking Dead season 8?" \
-  --output-dir data/processed \
-  --model-name all-MiniLM-L6-v2 \
-  --top-k 10 \
-  --show-contexts 3
-"""

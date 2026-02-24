@@ -12,13 +12,17 @@ import pandas as pd
 from dotenv import load_dotenv
 from raqr.data.build_faiss import build_faiss_index
 from raqr.data.build_graph import build_graph
-from raqr.data.alias_map import build_alias_map_from_redirects
+from raqr.data.alias_map import CURATED_ALIASES, build_alias_map_from_redirects, normalize_alias_map
 from raqr.data.canonical_clean import clean_html_to_structured_doc
 from raqr.data.chunking import chunk_blocks
 from raqr.data.corpus_acquisition import Budgets, ingest_complextempqa, ingest_nq, ingest_wikiwhy
 from raqr.data.corpus_schemas import CorpusChunk
 from raqr.data.docstore import DocStore
-from raqr.data.enrich_entities import extract_entities_spacy, load_spacy
+from raqr.data.enrich_entities import (
+    extract_entities_spacy,
+    load_spacy,
+    should_use_noun_chunks,
+)
 from raqr.data.enrich_relations import extract_relations_rebel, load_rebel
 from raqr.data.enrich_years import aggregate_year_fields, extract_years
 from raqr.data.entity_lexicon import build_entity_lexicon
@@ -196,6 +200,8 @@ def main() -> int:
         )
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     benchmark_by_source = _load_benchmark(args.benchmark)
     samples = _build_samples(
@@ -223,11 +229,19 @@ def main() -> int:
         for doc in docs:
             all_docs[doc.doc_key] = doc
 
-    nlp = load_spacy()
-    alias_map = build_alias_map_from_redirects(
+    noun_chunks_enabled = should_use_noun_chunks()
+    nlp = load_spacy(use_noun_chunks=noun_chunks_enabled)
+    alias_map_redirects = build_alias_map_from_redirects(
         titles=[doc.title for doc in all_docs.values() if doc.title],
         wiki=wiki,
+        curated_aliases={},
     )
+    alias_map = dict(alias_map_redirects)
+    alias_map.update(normalize_alias_map(CURATED_ALIASES))
+    alias_map_path = output_dir / "alias_map.json"
+    with alias_map_path.open("w", encoding="utf-8") as handle:
+        json.dump(alias_map_redirects, handle, ensure_ascii=False, sort_keys=True)
+
     rebel_tokenizer, rebel_model, rebel_device = load_rebel(args.re_model_name)
     chunks: List[dict] = []
     chunk_texts: List[str] = []
@@ -249,7 +263,12 @@ def main() -> int:
         for idx, piece in enumerate(chunk_blocks(structured.blocks)):
             years = extract_years(piece.text)
             year_fields = aggregate_year_fields(years, piece.text, piece.token_count)
-            entities = extract_entities_spacy(piece.text, nlp, alias_map)
+            entities = extract_entities_spacy(
+                piece.text,
+                nlp,
+                alias_map,
+                use_noun_chunks=noun_chunks_enabled,
+            )
             metadata = {
                 "dataset_origin": structured.dataset_origin,
                 "page_id": structured.page_id,
@@ -289,7 +308,6 @@ def main() -> int:
     for idx, rels in enumerate(relations_by_chunk):
         chunks[idx].setdefault("metadata", {})["relations"] = rels
 
-    output_dir = Path(args.output_dir)
     corpus_path = output_dir / "corpus.jsonl"
     _write_jsonl(corpus_path, chunks)
 
