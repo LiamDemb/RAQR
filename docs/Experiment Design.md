@@ -2,7 +2,7 @@
 
 ## 1. Experimental Overview
 **Objective:** To isolate and measure the impact of specific input signals and model architectures on routing accuracy within a RAG system.
-**Method:** "Gold Label" (Oracle) supervision. We generate ground-truth labels by running all strategies on a mixed benchmark and selecting the winner, then train/test routers to predict that winner.
+**Method:** "Gold Label" (Oracle) supervision. We generate ground-truth labels by running all strategies on a mixed benchmark, scoring answers via **LLM-as-judge** (semantic correctness), and selecting the winner; then we train/test routers to predict that winner.
 
 ## 2. The Dataset (Benchmark)
 To ensure the system encounters diverse reasoning requirements, we construct a unified evaluation dataset merging samples from three sources:
@@ -25,7 +25,7 @@ To generate training data, every question is processed by all 3 strategies. The 
 #### Definitions
 Let:
 
-- \(S_{dense}\), \(S_{temp}\), \(S_{graph}\) be the evaluation score (e.g., token-F1 in \([0, 1]\)) for each strategy on that question.
+- \(S_{dense}\), \(S_{temp}\), \(S_{graph}\) be the evaluation score for each strategy on that question. We use **LLM-as-judge** (0/1/2 scale: 0 = incorrect, 1 = partial, 2 = correct) rather than token-F1/EM, since answer formats vary and semantic comparison is more reliable.
 - Complexity order: **Dense (simplest)** < **Temporal** < **Graph (most complex)**.
 - A margin threshold \(\delta \ge 0\).
 - A small tolerance \(\varepsilon\) for floating comparisons (e.g., \(10^{-6}\)).
@@ -41,10 +41,12 @@ Let:
 
 This produces labels that encode the deployment goal: **do not spend complexity for tiny gains**.
 
+Per-strategy correctness is computed via **LLM-as-judge** (semantic comparison). We prefer this over token-F1/EM because answer formats vary across strategies and datasets; the margin-based selection rule applies to these judge scores.
+
 #### Choosing \(\delta\) (calibrated, not guessed)
 We select \(\delta\) empirically on the **Dev** set:
 
-- Compute \(\Delta = S_{best} - S_{second\_best}\) for each Dev example (using raw scores).
+- Compute \(\Delta = S_{best} - S_{second\_best}\) for each Dev example (using LLM-as-judge scores).
 - Inspect the distribution of \(\Delta\), and set \(\delta\) to a stable, defensible value (e.g., the 10th–20th percentile of \(\Delta\)).
 - Report an ablation over \(\delta \in \{0.00, 0.02, 0.05, 0.10\}\), including:
   - Label distribution shift as \(\delta\) changes
@@ -179,10 +181,11 @@ For the LLM router experiments:
 - Log the **parser version** (regex / extraction logic), since parser changes can change labels/routes
 
 ### D. Oracle Fairness Control (Labels depend on generation)
-Oracle labels are determined by answer quality (F1/EM), so they are a function of **retrieval + generation**. To ensure fairness across strategies during Oracle labeling:
+Oracle labels are determined by answer quality via **LLM-as-judge** (not F1/EM), so they are a function of **retrieval + generation**. To ensure fairness across strategies during Oracle labeling:
 
 - Use the **same generator model** (provider + model identifier) for all strategies.
 - Use the **same base prompt template** for all strategies (only the retrieved contexts differ).
+- When using the **LLM-as-judge**, use the same judge model and prompt for all strategies.
 - Record `model_id`, `prompt_hash`, and `sampling params` (e.g., temperature/top_p) in logs and cache keys.
 
 ### C. Latency & Cost Protocol (What “latency” means)
