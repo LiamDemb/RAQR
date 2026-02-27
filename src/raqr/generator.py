@@ -33,10 +33,21 @@ class SimpleLLMGenerator:
         start_time = time.perf_counter()
 
         # Prompt template
+        """
         prompt = (
             f'{self.base_prompt}\n\n'
-            f'Query: {query}\n\n'
             f'Context:\n' + '\n\n---\n\n'.join(context)
+            f'Question: {query}\n\n'
+            f'Answer:'
+        )
+        """
+
+        prompt = (
+            f"{self.base_prompt}\n\n"
+            "Context:\n"
+            + "\n\n---\n\n".join(context)
+            + f"\n\nQuestion: {query}\n\n"
+            "Answer:"
         )
         prompt_hash = _hash_prompt(prompt)
 

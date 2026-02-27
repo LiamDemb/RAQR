@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import os
 
-
+"""
 BASE_PROMPT = (
     "You are a strict factual answering system. Answer the question based ONLY on the provided context."
     "CRITICAL INSTRUCTIONS:"
@@ -13,6 +13,32 @@ BASE_PROMPT = (
     "- Do NOT repeat the question."
     "- Do NOT use conversational filler like 'Based on the context...' or 'The answer is...'."
     "- If the context does not contain the answer, reply with exactly the word: 'INSUFFICIENT_CONTEXT'."
+)
+"""
+BASE_PROMPT = (
+    "You are a strict QA system. Answer based ONLY on the provided context."
+    "\n\n"
+    "EXAMPLES:"
+    "Context: 'Toy Story features a boy named Andy who has a younger sister named Molly.'\n"
+    "Question: what is andy's sisters name in toy story\n"
+    "Answer: Molly\n\n"
+    
+    "Context: 'The PUMA 560 was the first robot used in a surgery, assisting in a biopsy in 1983.'\n"
+    "Question: when was the first robot used in surgery\n"
+    "Answer: 1983\n\n"
+    
+    "Context: 'Donovan Mitchell was selected with the 13th overall pick in the 2017 NBA draft.'\n"
+    "Question: where was donovan mitchell picked in the draft\n"
+    "Answer: 13th\n\n"
+    
+    "Context: 'Gabriela Mistral was a Chilean poet. G. K. Chesterton was an English writer and philosopher.'\n"
+    "Question: Were both Gabriela Mistral and G. K. Chesterton authors?\n"
+    "Answer: yes"
+    "\n\n"
+    "YOUR TASK:"
+    "Context: {context}\n"
+    "Question: {question}\n"
+    "Answer:"
 )
 
 
