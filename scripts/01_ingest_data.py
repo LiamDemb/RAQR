@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 from dotenv import load_dotenv
-from raqr.data.loaders import load_complextempqa, load_nq, load_wikiwhy
+from raqr.data.loaders import load_complextempqa, load_hotpotqa, load_nq, load_wikiwhy
 from raqr.data.schemas import BenchmarkItem, sha256_text
 
 logger = logging.getLogger(__name__)
@@ -118,6 +118,11 @@ def main() -> int:
         help="Path to WikiWhy CSV.",
     )
     parser.add_argument(
+        "--hotpotqa",
+        default=os.getenv("HOTPOTQA_PATH"),
+        help="Path to HotPotQA JSON/JSONL.",
+    )
+    parser.add_argument(
         "--output-dir",
         default=os.getenv("OUTPUT_DIR", "data/processed"),
         help="Output directory for processed artifacts.",
@@ -135,9 +140,19 @@ def main() -> int:
     parser.add_argument("--nq-version", default=os.getenv("NQ_VERSION"))
     parser.add_argument("--complextempqa-version", default=os.getenv("COMPLEXTEMPQA_VERSION"))
     parser.add_argument("--wikiwhy-version", default=os.getenv("WIKIWHY_VERSION"))
+    parser.add_argument("--hotpotqa-version", default=os.getenv("HOTPOTQA_VERSION"))
     args = parser.parse_args()
 
-    missing = [name for name, value in [("NQ_PATH", args.nq), ("COMPLEXTEMPQA_PATH", args.complextempqa), ("WIKIWHY_PATH", args.wikiwhy)] if not value]
+    missing = [
+        name
+        for name, value in [
+            ("NQ_PATH", args.nq),
+            ("COMPLEXTEMPQA_PATH", args.complextempqa),
+            ("WIKIWHY_PATH", args.wikiwhy),
+            ("HOTPOTQA_PATH", args.hotpotqa),
+        ]
+        if not value
+    ]
     if missing:
         raise ValueError(
             "Missing dataset paths. Provide CLI args or set: " + ", ".join(missing)
@@ -150,22 +165,21 @@ def main() -> int:
 
     benchmark_by_source: Dict[str, List[BenchmarkItem]] = defaultdict(list)
 
-    for record in load_nq(args.nq, dataset_version=args.nq_version):
-        benchmark_by_source[record.benchmark_item.dataset_source].append(
-            record.benchmark_item
-        )
+    for item in load_nq(args.nq, dataset_version=args.nq_version):
+        benchmark_by_source[item.dataset_source].append(item)
 
-    for record in load_complextempqa(
+    for item in load_complextempqa(
         args.complextempqa, dataset_version=args.complextempqa_version
     ):
-        benchmark_by_source[record.benchmark_item.dataset_source].append(
-            record.benchmark_item
-        )
+        benchmark_by_source[item.dataset_source].append(item)
 
-    for record in load_wikiwhy(args.wikiwhy, dataset_version=args.wikiwhy_version):
-        benchmark_by_source[record.benchmark_item.dataset_source].append(
-            record.benchmark_item
-        )
+    for item in load_wikiwhy(args.wikiwhy, dataset_version=args.wikiwhy_version):
+        benchmark_by_source[item.dataset_source].append(item)
+
+    for item in load_hotpotqa(
+        args.hotpotqa, dataset_version=args.hotpotqa_version
+    ):
+        benchmark_by_source[item.dataset_source].append(item)
 
     benchmark = stratified_split(
         benchmark_by_source,

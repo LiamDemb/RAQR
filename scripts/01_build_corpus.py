@@ -15,7 +15,13 @@ from raqr.data.build_graph import build_graph
 from raqr.data.alias_map import CURATED_ALIASES, build_alias_map_from_redirects, normalize_alias_map
 from raqr.data.canonical_clean import clean_html_to_structured_doc
 from raqr.data.chunking import chunk_blocks
-from raqr.data.corpus_acquisition import Budgets, ingest_complextempqa, ingest_nq, ingest_wikiwhy
+from raqr.data.corpus_acquisition import (
+    Budgets,
+    ingest_complextempqa,
+    ingest_hotpotqa,
+    ingest_nq,
+    ingest_wikiwhy,
+)
 from raqr.data.corpus_schemas import CorpusChunk
 from raqr.data.docstore import DocStore
 from raqr.data.enrich_entities import (
@@ -45,7 +51,12 @@ def _iter_jsonl(path: str):
 
 
 def _load_benchmark(path: str) -> Dict[str, Dict[str, dict]]:
-    by_source: Dict[str, Dict[str, dict]] = {"nq": {}, "complextempqa": {}, "wikiwhy": {}}
+    by_source: Dict[str, Dict[str, dict]] = {
+        "nq": {},
+        "complextempqa": {},
+        "wikiwhy": {},
+        "hotpotqa": {},
+    }
     for item in _iter_jsonl(path):
         source = item["dataset_source"]
         by_source.setdefault(source, {})[item["question_id"]] = item
@@ -69,6 +80,7 @@ def _build_samples(
     nq_path: str,
     complextempqa_path: str,
     wikiwhy_path: str,
+    hotpotqa_path: str,
 ) -> List[dict]:
     samples: List[dict] = []
 
@@ -130,6 +142,27 @@ def _build_samples(
             }
         )
 
+    for row in _iter_jsonl(hotpotqa_path):
+        question = _question_text_from_row(row, "hotpotqa")
+        if not question:
+            continue
+        qid = sha256_text(question)
+        bench = benchmark_by_source.get("hotpotqa", {}).get(qid)
+        if not bench:
+            continue
+        supporting_facts = row.get("supporting_facts") or {}
+        if not supporting_facts:
+            continue
+        samples.append(
+            {
+                "source": "hotpotqa",
+                "question_id": qid,
+                "question": question,
+                "gold_answers": bench.get("gold_answers", []),
+                "supporting_facts": supporting_facts,
+            }
+        )
+
     return samples
 
 
@@ -147,6 +180,7 @@ def main() -> int:
     parser.add_argument("--nq", default=os.getenv("NQ_PATH"))
     parser.add_argument("--complextempqa", default=os.getenv("COMPLEXTEMPQA_PATH"))
     parser.add_argument("--wikiwhy", default=os.getenv("WIKIWHY_PATH"))
+    parser.add_argument("--hotpotqa", default=os.getenv("HOTPOTQA_PATH"))
     parser.add_argument("--output-dir", default=os.getenv("OUTPUT_DIR", "data/processed"))
     parser.add_argument(
         "--docstore",
@@ -191,6 +225,7 @@ def main() -> int:
             ("NQ_PATH", args.nq),
             ("COMPLEXTEMPQA_PATH", args.complextempqa),
             ("WIKIWHY_PATH", args.wikiwhy),
+            ("HOTPOTQA_PATH", args.hotpotqa),
         ]
         if not value
     ]
@@ -205,7 +240,11 @@ def main() -> int:
 
     benchmark_by_source = _load_benchmark(args.benchmark)
     samples = _build_samples(
-        benchmark_by_source, args.nq, args.complextempqa, args.wikiwhy
+        benchmark_by_source,
+        args.nq,
+        args.complextempqa,
+        args.wikiwhy,
+        args.hotpotqa,
     )
 
     budgets = Budgets(
@@ -224,6 +263,8 @@ def main() -> int:
             docs = ingest_complextempqa(sample, budgets, docstore, wiki, wikidata)
         elif sample["source"] == "wikiwhy":
             docs = ingest_wikiwhy(sample, budgets, docstore, wiki)
+        elif sample["source"] == "hotpotqa":
+            docs = ingest_hotpotqa(sample, budgets, docstore, wiki)
         else:
             docs = ingest_nq(sample, budgets, docstore, wiki)
         for doc in docs:

@@ -29,6 +29,7 @@
 
 * **ComplexTempQA**: Wikidata QIDs (`question_entity`, `answer_entity`, etc.), no raw text.
 * **WikiWhy**: Wikipedia `title` per question.
+* **HotPotQA**: `supporting_facts.title` — a list of 2 Wikipedia page titles per question (the gold supporting documents).
 * **Natural Questions (NQ)**: raw HTML/tokens with `is_html` flags.
 
 ### Outputs (offline artifacts)
@@ -51,7 +52,7 @@ Each line is one **chunk**, not one document.
 {
   "chunk_id": "uuid",
   "doc_id": "uuid",
-  "source": "wikipedia|nq|wikiwhy|complextempqa",
+  "source": "wikipedia|nq|wikiwhy|complextempqa|hotpotqa",
   "title": "string|null",
   "url": "string|null",
   "text": "string",
@@ -59,7 +60,7 @@ Each line is one **chunk**, not one document.
   "char_span_in_doc": [1234, 1876],
 
   "metadata": {
-    "dataset_origin": "nq|wikiwhy|complextempqa|wiki",
+    "dataset_origin": "nq|wikiwhy|complextempqa|hotpotqa|wiki",
     "page_id": "string|null",
     "revision_id": "string|null",
 
@@ -329,6 +330,25 @@ def ingest_wikiwhy(example, budgets):
         pages.add(t)
 
     return fetch_wikipedia_docs(pages)
+```
+
+
+### 4.4 HotPotQA (Supporting Facts → Wikipedia Pages Only)
+
+**Problem:** HotPotQA provides `supporting_facts.title` — exactly 2 Wikipedia page titles that contain the answer evidence. No expansion is needed; the dataset already specifies the gold documents.
+
+#### 4.4.1 Base Retrieval
+
+* For each question, read `supporting_facts.title` (a list of 2 strings).
+* Fetch each Wikipedia page via the API (cached in docstore).
+* No outgoing-link or list-page expansion; HotPotQA uses only the supporting pages.
+
+#### 4.4.2 HotPotQA Ingestion Pseudocode
+
+```python
+def ingest_hotpotqa(example, budgets):
+    titles = unique(example.supporting_facts["title"])
+    return fetch_wikipedia_docs(titles)  # cached + deduped
 ```
 
 
@@ -667,6 +687,8 @@ def build_unified_corpus(samples):
             docs = ingest_complextempqa(ex, budgets)
         elif ex.source == "wikiwhy":
             docs = ingest_wikiwhy(ex, budgets)
+        elif ex.source == "hotpotqa":
+            docs = ingest_hotpotqa(ex, budgets)  # supporting_facts.title only
         elif ex.source == "nq":
             docs = ingest_nq(ex, budgets)  # clean HTML, optionally add linked pages within same budget
         else:

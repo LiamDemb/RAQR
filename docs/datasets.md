@@ -21,6 +21,14 @@ fields after downloading the final artifacts.
 - Checksum (sha256): TBD
 - Redistribution notes: Confirm allowed redistribution of processed outputs.
 
+## HotPotQA
+- Canonical source: https://huggingface.co/datasets/hotpotqa/hotpot_qa
+- License: CC-BY-SA-4.0
+- Version/Snapshot: TBD
+- Download date: TBD
+- Redistribution notes: Check license terms before redistributing processed data.
+- Download script: `scripts/datasets/hotpotqa_download.py`
+
 ## WikiWhy
 - Canonical source: https://github.com/matt-seb-ho/WikiWhy
 - License: MIT (per repository)

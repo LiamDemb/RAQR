@@ -12,12 +12,11 @@ def test_load_nq_parses_minimal_jsonl(tmp_path):
         "document_title": "The Hobbit",
     }
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    records = list(load_nq(str(path), dataset_version="v1", max_rows=5))
-    assert len(records) == 1
-    record = records[0]
-    assert record.benchmark_item.dataset_source == "nq"
-    assert record.benchmark_item.gold_answers == ["J.R.R. Tolkien"]
-    assert record.document.content.startswith("The Hobbit")
+    items = list(load_nq(str(path), dataset_version="v1", max_rows=5))
+    assert len(items) == 1
+    item = items[0]
+    assert item.dataset_source == "nq"
+    assert item.gold_answers == ["J.R.R. Tolkien"]
 
 
 def test_load_nq_parses_nested_document(tmp_path):
@@ -48,11 +47,10 @@ def test_load_nq_parses_nested_document(tmp_path):
         ],
     }
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    records = list(load_nq(str(path), dataset_version="v1", max_rows=5))
-    assert len(records) == 1
-    record = records[0]
-    assert record.benchmark_item.gold_answers == ["Larry Page", "Sergey Brin"]
-    assert "Google was founded" in record.document.content
+    items = list(load_nq(str(path), dataset_version="v1", max_rows=5))
+    assert len(items) == 1
+    item = items[0]
+    assert item.gold_answers == ["Larry Page", "Sergey Brin"]
 
 
 def test_load_nq_parses_annotations_dict(tmp_path):
@@ -70,10 +68,10 @@ def test_load_nq_parses_annotations_dict(tmp_path):
         },
     }
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    records = list(load_nq(str(path), dataset_version="v1", max_rows=5))
-    assert len(records) == 1
-    record = records[0]
-    assert record.benchmark_item.gold_answers == ["Larry Page"]
+    items = list(load_nq(str(path), dataset_version="v1", max_rows=5))
+    assert len(items) == 1
+    item = items[0]
+    assert item.gold_answers == ["Larry Page"]
 
 
 def test_load_complextempqa_parses_json(tmp_path):
@@ -86,12 +84,11 @@ def test_load_complextempqa_parses_json(tmp_path):
         }
     ]
     path.write_text(json.dumps(payload), encoding="utf-8")
-    records = list(load_complextempqa(str(path), dataset_version="v1", max_rows=5))
-    assert len(records) == 1
-    record = records[0]
-    assert record.benchmark_item.dataset_source == "complextempqa"
-    assert record.benchmark_item.gold_answers == ["1969"]
-    assert record.document.metadata.get("context_fallback") is True
+    items = list(load_complextempqa(str(path), dataset_version="v1", max_rows=5))
+    assert len(items) == 1
+    item = items[0]
+    assert item.dataset_source == "complextempqa"
+    assert item.gold_answers == ["1969"]
 
 
 def test_load_wikiwhy_parses_csv(tmp_path):
@@ -102,11 +99,11 @@ def test_load_wikiwhy_parses_csv(tmp_path):
         "Leaves change color when chlorophyll breaks down.\n",
         encoding="utf-8",
     )
-    records = list(load_wikiwhy(str(path), dataset_version="v1", max_rows=5))
-    assert len(records) == 1
-    record = records[0]
-    assert record.benchmark_item.dataset_source == "wikiwhy"
-    assert record.benchmark_item.gold_answers == ["Because chlorophyll breaks down"]
+    items = list(load_wikiwhy(str(path), dataset_version="v1", max_rows=5))
+    assert len(items) == 1
+    item = items[0]
+    assert item.dataset_source == "wikiwhy"
+    assert item.gold_answers == ["Because chlorophyll breaks down"]
 
 
 def test_load_wikiwhy_parses_jsonl(tmp_path):
@@ -118,7 +115,7 @@ def test_load_wikiwhy_parses_jsonl(tmp_path):
         "cause": "Because chlorophyll breaks down.",
     }
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    records = list(load_wikiwhy(str(path), dataset_version="v1", max_rows=5))
-    assert len(records) == 1
-    record = records[0]
-    assert record.benchmark_item.dataset_source == "wikiwhy"
+    items = list(load_wikiwhy(str(path), dataset_version="v1", max_rows=5))
+    assert len(items) == 1
+    item = items[0]
+    assert item.dataset_source == "wikiwhy"
