@@ -5,6 +5,7 @@
 NQ_PATH ?= data/raw/nq_300.jsonl
 COMPLEXTEMPQA_PATH ?= data/raw/complex_tempqa_300.jsonl
 WIKIWHY_PATH ?= data/raw/wikiwhy_300.jsonl
+HOTPOTQA_PATH ?= data/raw/hotpotqa_300.jsonl
 BENCHMARK_PATH ?= data/processed/benchmark.jsonl
 OUTPUT_DIR ?= data/processed
 HF_HOME ?= $(OUTPUT_DIR)/hf_cache
@@ -21,11 +22,14 @@ lock:
 test:
 	poetry run pytest
 
+# Dataset paths: set in .env or override on CLI. Omit a path (e.g. NQ_PATH=) to exclude that dataset.
+# Example single-dataset ingest: NQ_PATH= COMPLEXTEMPQA_PATH= WIKIWHY_PATH= make ingest
 ingest:
 	poetry run python scripts/01_ingest_data.py \
 		--nq "$(NQ_PATH)" \
 		--complextempqa "$(COMPLEXTEMPQA_PATH)" \
 		--wikiwhy "$(WIKIWHY_PATH)" \
+		--hotpotqa "$(HOTPOTQA_PATH)" \
 		--output-dir "$(OUTPUT_DIR)"
 
 build-corpus:
@@ -34,6 +38,7 @@ build-corpus:
 		--nq "$(NQ_PATH)" \
 		--complextempqa "$(COMPLEXTEMPQA_PATH)" \
 		--wikiwhy "$(WIKIWHY_PATH)" \
+		--hotpotqa "$(HOTPOTQA_PATH)" \
 		--output-dir "$(OUTPUT_DIR)"
 
 build-corpus-simple:
@@ -42,6 +47,7 @@ build-corpus-simple:
 		--nq "$(NQ_PATH)" \
 		--complextempqa "$(COMPLEXTEMPQA_PATH)" \
 		--wikiwhy "$(WIKIWHY_PATH)" \
+		--hotpotqa "$(HOTPOTQA_PATH)" \
 		--output-dir "$(OUTPUT_DIR)" \
 		--max-pages 3 \
 		--max-hops 1 \

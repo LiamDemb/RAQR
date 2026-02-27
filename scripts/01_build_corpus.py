@@ -51,12 +51,8 @@ def _iter_jsonl(path: str):
 
 
 def _load_benchmark(path: str) -> Dict[str, Dict[str, dict]]:
-    by_source: Dict[str, Dict[str, dict]] = {
-        "nq": {},
-        "complextempqa": {},
-        "wikiwhy": {},
-        "hotpotqa": {},
-    }
+    """Load benchmark and group by dataset_source. Only sources with items are included."""
+    by_source: Dict[str, Dict[str, dict]] = {}
     for item in _iter_jsonl(path):
         source = item["dataset_source"]
         by_source.setdefault(source, {})[item["question_id"]] = item
@@ -77,91 +73,97 @@ def _question_text_from_row(row: dict, source: str) -> str | None:
 
 def _build_samples(
     benchmark_by_source: Dict[str, Dict[str, dict]],
-    nq_path: str,
-    complextempqa_path: str,
-    wikiwhy_path: str,
-    hotpotqa_path: str,
+    paths_by_source: Dict[str, str],
 ) -> List[dict]:
+    """Build samples from benchmark and raw dataset files. Only processes sources with paths."""
     samples: List[dict] = []
 
-    for row in _iter_jsonl(nq_path):
-        question = _question_text_from_row(row, "nq")
-        if not question:
-            continue
-        qid = sha256_text(question)
-        bench = benchmark_by_source.get("nq", {}).get(qid)
-        if not bench:
-            continue
-        samples.append(
-            {
-                "source": "nq",
+    nq_path = paths_by_source.get("nq")
+    if nq_path:
+        for row in _iter_jsonl(nq_path):
+            question = _question_text_from_row(row, "nq")
+            if not question:
+                continue
+            qid = sha256_text(question)
+            bench = benchmark_by_source.get("nq", {}).get(qid)
+            if not bench:
+                continue
+            samples.append(
+                {
+                    "source": "nq",
+                    "question_id": qid,
+                    "question": question,
+                    "gold_answers": bench.get("gold_answers", []),
+                    "document": row.get("document"),
+                    "document_html": row.get("document_html"),
+                    "document_title": row.get("document_title"),
+                    "title": row.get("title"),
+                }
+            )
+
+    complextempqa_path = paths_by_source.get("complextempqa")
+    if complextempqa_path:
+        for row in _iter_jsonl(complextempqa_path):
+            question = _question_text_from_row(row, "complextempqa")
+            if not question:
+                continue
+            qid = sha256_text(question)
+            bench = benchmark_by_source.get("complextempqa", {}).get(qid)
+            if not bench:
+                continue
+            row_sample = {
+                "source": "complextempqa",
                 "question_id": qid,
                 "question": question,
                 "gold_answers": bench.get("gold_answers", []),
-                "document": row.get("document"),
-                "document_html": row.get("document_html"),
-                "document_title": row.get("document_title"),
-                "title": row.get("title"),
+                "question_entity": row.get("question_entity"),
+                "answer_entity": row.get("answer_entity"),
+                "question_country_entity": row.get("question_country_entity"),
             }
-        )
+            samples.append(row_sample)
 
-    for row in _iter_jsonl(complextempqa_path):
-        question = _question_text_from_row(row, "complextempqa")
-        if not question:
-            continue
-        qid = sha256_text(question)
-        bench = benchmark_by_source.get("complextempqa", {}).get(qid)
-        if not bench:
-            continue
-        row_sample = {
-            "source": "complextempqa",
-            "question_id": qid,
-            "question": question,
-            "gold_answers": bench.get("gold_answers", []),
-            "question_entity": row.get("question_entity"),
-            "answer_entity": row.get("answer_entity"),
-            "question_country_entity": row.get("question_country_entity"),
-        }
-        samples.append(row_sample)
+    wikiwhy_path = paths_by_source.get("wikiwhy")
+    if wikiwhy_path:
+        for row in _iter_jsonl(wikiwhy_path):
+            question = _question_text_from_row(row, "wikiwhy")
+            if not question:
+                continue
+            qid = sha256_text(question)
+            bench = benchmark_by_source.get("wikiwhy", {}).get(qid)
+            if not bench:
+                continue
+            samples.append(
+                {
+                    "source": "wikiwhy",
+                    "question_id": qid,
+                    "question": question,
+                    "gold_answers": bench.get("gold_answers", []),
+                    "title": row.get("title"),
+                }
+            )
 
-    for row in _iter_jsonl(wikiwhy_path):
-        question = _question_text_from_row(row, "wikiwhy")
-        if not question:
-            continue
-        qid = sha256_text(question)
-        bench = benchmark_by_source.get("wikiwhy", {}).get(qid)
-        if not bench:
-            continue
-        samples.append(
-            {
-                "source": "wikiwhy",
-                "question_id": qid,
-                "question": question,
-                "gold_answers": bench.get("gold_answers", []),
-                "title": row.get("title"),
-            }
-        )
-
-    for row in _iter_jsonl(hotpotqa_path):
-        question = _question_text_from_row(row, "hotpotqa")
-        if not question:
-            continue
-        qid = sha256_text(question)
-        bench = benchmark_by_source.get("hotpotqa", {}).get(qid)
-        if not bench:
-            continue
-        supporting_facts = row.get("supporting_facts") or {}
-        if not supporting_facts:
-            continue
-        samples.append(
-            {
-                "source": "hotpotqa",
-                "question_id": qid,
-                "question": question,
-                "gold_answers": bench.get("gold_answers", []),
-                "supporting_facts": supporting_facts,
-            }
-        )
+    hotpotqa_path = paths_by_source.get("hotpotqa")
+    if hotpotqa_path:
+        for row in _iter_jsonl(hotpotqa_path):
+            question = _question_text_from_row(row, "hotpotqa")
+            if not question:
+                continue
+            qid = sha256_text(question)
+            bench = benchmark_by_source.get("hotpotqa", {}).get(qid)
+            if not bench:
+                continue
+            supporting_facts = row.get("supporting_facts") or {}
+            if not supporting_facts:
+                continue
+            samples.append(
+                {
+                    "source": "hotpotqa",
+                    "question_id": qid,
+                    "question": question,
+                    "gold_answers": bench.get("gold_answers", []),
+                    "supporting_facts": supporting_facts,
+                }
+            )
 
     return samples
 
@@ -218,34 +220,40 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    missing = [
-        name
-        for name, value in [
-            ("BENCHMARK_PATH", args.benchmark),
-            ("NQ_PATH", args.nq),
-            ("COMPLEXTEMPQA_PATH", args.complextempqa),
-            ("WIKIWHY_PATH", args.wikiwhy),
-            ("HOTPOTQA_PATH", args.hotpotqa),
-        ]
-        if not value
-    ]
-    if missing:
-        raise ValueError(
-            "Missing dataset paths. Provide CLI args or set: " + ", ".join(missing)
-        )
+    if not args.benchmark or not str(args.benchmark).strip():
+        raise ValueError("BENCHMARK_PATH is required. Provide --benchmark or set BENCHMARK_PATH.")
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     benchmark_by_source = _load_benchmark(args.benchmark)
-    samples = _build_samples(
-        benchmark_by_source,
-        args.nq,
-        args.complextempqa,
-        args.wikiwhy,
-        args.hotpotqa,
-    )
+    sources_in_benchmark = set(benchmark_by_source.keys())
+
+    path_env_map = {
+        "nq": ("NQ_PATH", args.nq),
+        "complextempqa": ("COMPLEXTEMPQA_PATH", args.complextempqa),
+        "wikiwhy": ("WIKIWHY_PATH", args.wikiwhy),
+        "hotpotqa": ("HOTPOTQA_PATH", args.hotpotqa),
+    }
+    paths_by_source: Dict[str, str] = {}
+    missing = []
+    for source in sources_in_benchmark:
+        env_name, path = path_env_map.get(source, (None, None))
+        if path and str(path).strip():
+            paths_by_source[source] = path.strip()
+        else:
+            missing.append(env_name or source)
+
+    if missing:
+        raise ValueError(
+            f"Benchmark contains sources {sorted(sources_in_benchmark)} but paths are missing "
+            f"for: {', '.join(missing)}. Provide the corresponding paths via CLI or env."
+        )
+
+    logger.info("Building corpus from datasets: %s", ", ".join(sorted(paths_by_source.keys())))
+
+    samples = _build_samples(benchmark_by_source, paths_by_source)
 
     budgets = Budgets(
         max_pages_per_question=args.max_pages,
