@@ -53,14 +53,6 @@ def load_rebel(model_name: str = "Babelscape/rebel-large", device: Optional[str]
     return tokenizer, model, resolved_device
 
 
-def _truncate_text(text: str, max_chars: int) -> str:
-    if max_chars <= 0:
-        return text
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars]
-
-
 def parse_rebel_output(text: str) -> List[Tuple[str, str, str]]:
     """
     Parse REBEL output tokens into (subj, pred, obj) triples.
@@ -147,8 +139,7 @@ def extract_relations_rebel(
     device: str,
     alias_map: Optional[Dict[str, str]] = None,
     batch_size: int = 4,
-    max_input_chars: int = 2000,
-    max_input_tokens: int = 512,
+    max_input_tokens: int = 1024,
     max_new_tokens: int = 128,
 ) -> List[List[Dict[str, str]]]:
     alias_map = alias_map or {}
@@ -157,11 +148,13 @@ def extract_relations_rebel(
 
     for start in range(0, len(texts), batch_size):
         batch = texts[start : start + batch_size]
-        truncated = [_truncate_text(t, max_input_chars) for t in batch]
-        total_truncated += sum(1 for i, t in enumerate(batch) if len(t) != len(truncated[i]))
+        for t in batch:
+            enc_single = tokenizer.encode(t, add_special_tokens=True, truncation=False)
+            if len(enc_single) > max_input_tokens:
+                total_truncated += 1
 
         enc = tokenizer(
-            truncated,
+            batch,
             return_tensors="pt",
             padding=True,
             truncation=True,
@@ -197,5 +190,5 @@ def extract_relations_rebel(
             results.append(unique)
 
     if total_truncated:
-        logger.info("Relation extraction truncated %s chunks for max_input_chars.", total_truncated)
+        logger.info("Relation extraction truncated %s chunks for max_input_tokens.", total_truncated)
     return results

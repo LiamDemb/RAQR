@@ -5,11 +5,18 @@ import pytest
 from raqr.data.build_graph import build_graph
 from raqr.data.canonical_clean import clean_html_to_structured_doc
 from raqr.data.chunking import chunk_blocks
+from raqr.data.corpus_schemas import Block
 from raqr.data.docstore import DocRecord, DocStore
 from raqr.data.alias_map import normalize_alias_map
 from raqr.data.enrich_entities import norm_entity
 from raqr.data.enrich_years import aggregate_year_fields, extract_years
 from raqr.data.entity_lexicon import build_entity_lexicon
+
+
+@pytest.fixture(scope="session")
+def rebel_tokenizer():
+    from transformers import AutoTokenizer
+    return AutoTokenizer.from_pretrained("Babelscape/rebel-large")
 
 
 def test_clean_html_to_structured_doc_parses_blocks():
@@ -72,14 +79,81 @@ def test_norm_entity_alias():
     assert norm_entity("U.S.", alias_map) == "united states"
 
 
-def test_chunk_blocks_bounds():
+def test_chunk_blocks_bounds(rebel_tokenizer):
     blocks = [
-        type("B", (), {"text": "word " * 300, "section_path": ["Lead"], "block_type": "paragraph"})(),
-        type("B", (), {"text": "word " * 300, "section_path": ["Lead"], "block_type": "paragraph"})(),
+        Block(text="word " * 300, section_path=["Lead"], block_type="paragraph"),
+        Block(text="word " * 300, section_path=["Lead"], block_type="paragraph"),
     ]
-    chunks = chunk_blocks(blocks, min_tokens=200, max_tokens=500, overlap_tokens=50)
+    chunks = chunk_blocks(
+        blocks,
+        tokenizer=rebel_tokenizer,
+        min_tokens=200,
+        max_tokens=500,
+        overlap_tokens=50,
+    )
     assert len(chunks) >= 1
     assert all(chunk.token_count >= 200 for chunk in chunks)
+    assert all(chunk.token_count <= 500 for chunk in chunks)
+
+
+def test_chunk_blocks_respects_max_tokens(rebel_tokenizer):
+    """No chunk exceeds max_tokens (BPE count)."""
+    blocks = [
+        Block(text="The quick brown fox " * 100, section_path=["Lead"], block_type="paragraph"),
+    ]
+    max_tokens = 200
+    chunks = chunk_blocks(
+        blocks,
+        tokenizer=rebel_tokenizer,
+        min_tokens=50,
+        max_tokens=max_tokens,
+        overlap_tokens=20,
+    )
+    assert len(chunks) >= 1
+    for chunk in chunks:
+        actual = len(rebel_tokenizer.encode(chunk.text, add_special_tokens=False))
+        assert actual <= max_tokens, f"chunk has {actual} tokens, max={max_tokens}"
+
+
+def test_chunk_blocks_long_block_splitting(rebel_tokenizer):
+    """Single block exceeding max_tokens is split into multiple chunks."""
+    long_text = "The history of computing spans many decades. " * 80
+    blocks = [Block(text=long_text, section_path=["History"], block_type="paragraph")]
+    max_tokens = 200
+    chunks = chunk_blocks(
+        blocks,
+        tokenizer=rebel_tokenizer,
+        min_tokens=50,
+        max_tokens=max_tokens,
+        overlap_tokens=30,
+    )
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        actual = len(rebel_tokenizer.encode(chunk.text, add_special_tokens=False))
+        assert actual <= max_tokens
+
+
+def test_chunk_blocks_hard_caps_max_even_below_min(rebel_tokenizer):
+    """
+    Regression: previously we could exceed max_tokens if the buffer hadn't yet reached
+    min_tokens (because we only flushed once buf_tokens >= min_tokens).
+    """
+    blocks = [
+        Block(text="word " * 600, section_path=["Lead"], block_type="paragraph"),
+        Block(text="word " * 250, section_path=["Lead"], block_type="paragraph"),
+    ]
+    max_tokens = 800
+    chunks = chunk_blocks(
+        blocks,
+        tokenizer=rebel_tokenizer,
+        min_tokens=700,
+        max_tokens=max_tokens,
+        overlap_tokens=50,
+    )
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        actual = len(rebel_tokenizer.encode(chunk.text, add_special_tokens=False))
+        assert actual <= max_tokens, f"chunk has {actual} tokens, max={max_tokens}"
 
 
 def test_build_graph_nodes():

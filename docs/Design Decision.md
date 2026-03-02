@@ -133,3 +133,11 @@ def select_gold_label(results: Dict[str, float]) -> str:
 ```
 
 _This ensures our router is trained to be efficient, not just accuracy-obsessed._
+
+## 6. Token Limits and Truncation
+
+**REBEL (relation extraction):** Uses BPE token limit (1024, from `max_position_embeddings`). Input is truncated by the tokenizer to `RE_MAX_INPUT_TOKENS` (default 1024). No character-based truncation.
+
+**Embedder (all-MiniLM-L6-v2):** Truncates at 256 tokens internally. No configuration needed.
+
+**Chunking:** Uses REBEL BPE tokenizer. Default 500–800 tokens per chunk. Chunks are guaranteed under 1024; configurable via `CHUNK_MIN_TOKENS`, `CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`.

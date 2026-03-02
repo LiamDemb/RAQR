@@ -130,7 +130,9 @@ Run **the same enrichment** on all docs:
 
 ### Stage E — Chunking & Serialization
 
-Chunk to 500–1000 tokens with overlap; write `corpus.jsonl`.
+Chunk to 500–800 BPE tokens (REBEL tokenizer) with overlap; write `corpus.jsonl`. Chunks are guaranteed to stay under REBEL's 1024-token limit. Relation extraction uses `RE_MAX_INPUT_TOKENS` (1024); tokenizer truncation remains as a safety net.
+
+**Token limits:** Chunking uses the REBEL BPE tokenizer. Default 500–800 tokens per chunk (configurable via `CHUNK_MIN_TOKENS`, `CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`). REBEL accepts up to 1024 BPE tokens; the embedder (all-MiniLM-L6-v2) truncates at 256 tokens internally.
 
 ### Stage F — Indexing
 
@@ -475,47 +477,27 @@ def extract_entities_spacy(text, nlp, alias_map):
 ```
 
 
-## 6) Chunking Strategy (500–1000 tokens + overlap)
+## 6) Chunking Strategy (500–800 BPE tokens + overlap)
 
 ### 6.1 Requirements
 
-* Chunk size: **500–1000 tokens**
-* Overlap: **~10–15%** (e.g., 100–150 tokens)
+* Chunk size: **500–800 BPE tokens** (REBEL tokenizer; max 800 keeps chunks under REBEL's 1024 limit)
+* Overlap: **~10–15%** (e.g., 100 tokens)
 * Preserve section boundaries where possible (don’t merge unrelated sections)
 
 ### 6.2 Algorithm
 
 1. Split doc into blocks (paragraph/list/table) with section paths.
-2. Accumulate blocks until token budget reached.
-3. When exceeding:
-
+2. For each block, count BPE tokens via REBEL tokenizer.
+3. Accumulate blocks until token budget reached.
+4. When exceeding:
    * finalize chunk
-   * start next chunk with overlap tail (token-based, not block-based if needed)
+   * start next chunk with overlap tail (token-based)
+5. If a single block exceeds `max_tokens`, flush buffer and split the block into overlapping sub-chunks.
 
-### 6.3 Chunking Pseudocode
+### 6.3 Implementation
 
-```python
-def chunk_doc(blocks, tok, min_t=500, max_t=1000, overlap_t=120):
-    chunks = []
-    buf, buf_tokens = [], 0
-
-    for b in blocks:
-        t = tok.count(b.text)
-        if buf_tokens + t > max_t and buf_tokens >= min_t:
-            chunk_text = join_blocks(buf)
-            chunks.append(make_chunk(chunk_text, buf))
-            tail = tok.tail(chunk_text, overlap_t)
-            buf = [Block(text=tail, section_path=buf[-1].section_path)]
-            buf_tokens = tok.count(tail)
-
-        buf.append(b)
-        buf_tokens += t
-
-    if buf:
-        chunks.append(make_chunk(join_blocks(buf), buf))
-
-    return chunks
-```
+Implemented in `src/raqr/data/chunking.py`. Uses `chunk_blocks(blocks, tokenizer, min_tokens=500, max_tokens=800, overlap_tokens=100)`. The tokenizer is REBEL's (`Babelscape/rebel-large`); chunk limits are configurable via `--chunk-min-tokens`, `--chunk-max-tokens`, `--chunk-overlap-tokens` or env vars.
 
 
 ## 7) Indexing Artifacts

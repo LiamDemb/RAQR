@@ -199,9 +199,9 @@ def main() -> int:
         default=int(os.getenv("RE_BATCH_SIZE", "4")),
     )
     parser.add_argument(
-        "--re-max-input-chars",
+        "--re-max-input-tokens",
         type=int,
-        default=int(os.getenv("RE_MAX_INPUT_CHARS", "2000")),
+        default=int(os.getenv("RE_MAX_INPUT_TOKENS", "1024")),
     )
     parser.add_argument(
         "--re-max-new-tokens",
@@ -217,6 +217,21 @@ def main() -> int:
         "--max-country-pages",
         type=int,
         default=int(os.getenv("MAX_COUNTRY_PAGES", "1")),
+    )
+    parser.add_argument(
+        "--chunk-min-tokens",
+        type=int,
+        default=int(os.getenv("CHUNK_MIN_TOKENS", "500")),
+    )
+    parser.add_argument(
+        "--chunk-max-tokens",
+        type=int,
+        default=int(os.getenv("CHUNK_MAX_TOKENS", "800")),
+    )
+    parser.add_argument(
+        "--chunk-overlap-tokens",
+        type=int,
+        default=int(os.getenv("CHUNK_OVERLAP_TOKENS", "100")),
     )
     args = parser.parse_args()
 
@@ -309,7 +324,15 @@ def main() -> int:
             page_id=doc.page_id,
             revision_id=doc.revision_id,
         )
-        for idx, piece in enumerate(chunk_blocks(structured.blocks)):
+        for idx, piece in enumerate(
+            chunk_blocks(
+                structured.blocks,
+                tokenizer=rebel_tokenizer,
+                min_tokens=args.chunk_min_tokens,
+                max_tokens=args.chunk_max_tokens,
+                overlap_tokens=args.chunk_overlap_tokens,
+            )
+        ):
             years = extract_years(piece.text)
             year_fields = aggregate_year_fields(years, piece.text, piece.token_count)
             entities = extract_entities_spacy(
@@ -351,7 +374,7 @@ def main() -> int:
         rebel_device,
         alias_map=alias_map,
         batch_size=args.re_batch_size,
-        max_input_chars=args.re_max_input_chars,
+        max_input_tokens=args.re_max_input_tokens,
         max_new_tokens=args.re_max_new_tokens,
     )
     for idx, rels in enumerate(relations_by_chunk):
