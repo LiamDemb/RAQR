@@ -5,41 +5,11 @@ from __future__ import annotations
 import ast
 import os
 
-"""
-BASE_PROMPT = (
-    "You are a strict factual answering system. Answer the question based ONLY on the provided context."
-    "CRITICAL INSTRUCTIONS:"
-    "- Be as concise as possible."
-    "- Do NOT repeat the question."
-    "- Do NOT use conversational filler like 'Based on the context...' or 'The answer is...'."
-    "- If the context does not contain the answer, reply with exactly the word: 'INSUFFICIENT_CONTEXT'."
-)
-"""
-BASE_PROMPT = (
-    "You are a strict QA system. Answer based ONLY on the provided context."
-    "\n\n"
-    "EXAMPLES:"
-    "Context: 'Toy Story features a boy named Andy who has a younger sister named Molly.'\n"
-    "Question: what is andy's sisters name in toy story\n"
-    "Answer: Molly\n\n"
-    
-    "Context: 'The PUMA 560 was the first robot used in a surgery, assisting in a biopsy in 1983.'\n"
-    "Question: when was the first robot used in surgery\n"
-    "Answer: 1983\n\n"
-    
-    "Context: 'Donovan Mitchell was selected with the 13th overall pick in the 2017 NBA draft.'\n"
-    "Question: where was donovan mitchell picked in the draft\n"
-    "Answer: 13th\n\n"
-    
-    "Context: 'Gabriela Mistral was a Chilean poet. G. K. Chesterton was an English writer and philosopher.'\n"
-    "Question: Were both Gabriela Mistral and G. K. Chesterton authors?\n"
-    "Answer: yes"
-    "\n\n"
-    "YOUR TASK:"
-    "Context: {context}\n"
-    "Question: {question}\n"
-    "Answer:"
-)
+from raqr.prompts import get_generator_prompt
+
+# Legacy: BASE_PROMPT kept for any direct imports; prefer get_generator_prompt() for env override.
+# See raqr.prompts for BASE_PROMPT_OLD and other commented alternatives.
+BASE_PROMPT = get_generator_prompt()
 
 
 def normalize_gold_answers(raw: list) -> list[str]:
@@ -77,7 +47,7 @@ def build_dense_strategy(output_dir: str):
         embedder=SentenceTransformersEmbedder(model_name="all-MiniLM-L6-v2"),
         generator=SimpleLLMGenerator(
             model_id=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            base_prompt=BASE_PROMPT,
+            base_prompt=get_generator_prompt(),
         ),
         corpus=JsonCorpusLoader(jsonl_path=corpus_path),
         top_k=int(os.getenv("DENSE_TOP_K", "10")),
@@ -109,7 +79,7 @@ def build_graph_strategy(output_dir: str):
         corpus=JsonCorpusLoader(jsonl_path=corpus_path),
         generator=SimpleLLMGenerator(
             model_id=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            base_prompt=BASE_PROMPT,
+            base_prompt=get_generator_prompt(),
         ),
         entity_extractor=SpacyQueryEntityExtractor(alias_resolver=alias_resolver),
         top_k=int(os.getenv("GRAPH_TOP_K", "10")),

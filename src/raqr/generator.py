@@ -32,23 +32,22 @@ class SimpleLLMGenerator:
     def generate(self, query: str, context: List[str]) -> GenerationResult:
         start_time = time.perf_counter()
 
-        # Prompt template
-        """
-        prompt = (
-            f'{self.base_prompt}\n\n'
-            f'Context:\n' + '\n\n---\n\n'.join(context)
-            f'Question: {query}\n\n'
-            f'Answer:'
-        )
-        """
+        joined_context = "\n\n---\n\n".join(context) if context else ""
 
-        prompt = (
-            f"{self.base_prompt}\n\n"
-            "Context:\n"
-            + "\n\n---\n\n".join(context)
-            + f"\n\nQuestion: {query}\n\n"
-            "Answer:"
-        )
+        # Support template-style prompts with {context} and {question} placeholders
+        if "{context}" in self.base_prompt and "{question}" in self.base_prompt:
+            prompt = self.base_prompt.format(context=joined_context, question=query)
+            system = "You are a strict QA system. Answer based ONLY on the provided context."
+        else:
+            prompt = (
+                f"{self.base_prompt}\n\n"
+                "Context:\n"
+                + joined_context
+                + f"\n\nQuestion: {query}\n\n"
+                "Answer:"
+            )
+            system = self.base_prompt
+
         prompt_hash = _hash_prompt(prompt)
 
         # OpenAI API call
@@ -56,7 +55,7 @@ class SimpleLLMGenerator:
         response = client.chat.completions.create(
             model=self.model_id,
             messages=[
-                {"role": "system", "content": self.base_prompt},
+                {"role": "system", "content": system},
                 {"role": "user", "content": prompt}
             ],
             temperature=self.temperature,

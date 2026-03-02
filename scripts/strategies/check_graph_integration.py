@@ -13,6 +13,7 @@ from raqr.entity_alias_resolver import EntityAliasResolver
 from raqr.generator import SimpleLLMGenerator
 from raqr.graph_store import NetworkXGraphStore
 from raqr.loaders import JsonCorpusLoader
+from raqr.prompts import get_generator_prompt
 from raqr.strategies.graph import GraphStrategy, SpacyQueryEntityExtractor
 
 
@@ -39,10 +40,7 @@ def _build_strategy(output_dir: str, top_k: int, max_hops: int) -> GraphStrategy
         corpus=JsonCorpusLoader(jsonl_path=corpus_path),
         generator=SimpleLLMGenerator(
             model_id=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            base_prompt=(
-                "Answer the question based only on the provided context. "
-                "If the context does not contain the answer, say so."
-            ),
+            base_prompt=get_generator_prompt(),
         ),
         entity_extractor=SpacyQueryEntityExtractor(alias_resolver=alias_resolver),
         top_k=top_k,

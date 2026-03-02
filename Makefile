@@ -1,4 +1,4 @@
-.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple eval-strategies mock-oracle
+.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple eval-strategies mock-oracle debug-graph
 
 -include .env
 
@@ -54,7 +54,7 @@ build-corpus-simple:
 		--max-list-pages 0 \
 		--max-country-pages 0 \
 		--re-batch-size 1 \
-		--re-max-input-chars 600 \
+		--re-max-input-tokens 512 \
 		--re-max-new-tokens 64
 
 eval-strategies:
@@ -67,3 +67,7 @@ mock-oracle:
 	poetry run python scripts/dev/mock_oracle_eval.py \
 		--benchmark "$(BENCHMARK_PATH)" \
 		--output-dir "$(OUTPUT_DIR)"
+
+# Debug GraphStrategy: pass your query via QUERY=... (e.g. make debug-graph QUERY="What happened in 2017?")
+debug-graph:
+	poetry run python scripts/strategies/debug_graph.py "$(QUERY)" --output-dir "$(OUTPUT_DIR)"
