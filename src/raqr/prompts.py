@@ -4,8 +4,8 @@ All strategies, evaluation scripts, and integration checks use these prompts
 for consistency. To customize for testing:
 
 - Edit the constants below, or
-- Set GENERATOR_BASE_PROMPT_FILE / LLM_JUDGE_PROMPT_FILE to a .txt file path
-  to load an alternate prompt from disk.
+- Set GENERATOR_BASE_PROMPT_FILE / LLM_JUDGE_PROMPT_FILE / LLM_TRIPLE_PROMPT_FILE
+  to a .txt file path to load an alternate prompt from disk.
 """
 
 from __future__ import annotations
@@ -102,3 +102,34 @@ def get_judge_prompt() -> str:
     if path and Path(path).is_file():
         return Path(path).read_text(encoding="utf-8")
     return DEFAULT_JUDGE_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Triple extractor prompt (used by LLMTripleExtractor for relation extraction)
+# ---------------------------------------------------------------------------
+
+DEFAULT_TRIPLE_EXTRACTOR_PROMPT = """You are a relation extractor. Extract factual subject-predicate-object triples from the given text.
+
+TASK: From the text below, identify triples where:
+- subject: a named entity (person, organization, place, event, work, etc.)
+- predicate: a relation type (occupation, born_in, died_in, spouse, member_of, works_at, located_in, founded, etc.)
+- object: the related value (another entity, date, place, role, etc.)
+
+RULES:
+- Extract only triples explicitly stated or strongly implied in the text. Do not infer or hallucinate.
+- Use concise, normalized predicates (snake_case, e.g., occupation, born_in, member_of).
+- For dates, use predicates like born_in, died_in, founded_in; objects can be years or full dates.
+- Quote the exact evidence snippet from the text in the "evidence" field.
+
+INPUT TEXT:
+{text}
+
+Output your extracted triples via the structured tool (each triple: subj_surface, pred, obj_surface, confidence 0-1, evidence)."""
+
+
+def get_triple_extractor_prompt() -> str:
+    """Return the triple extractor prompt template. Override via LLM_TRIPLE_PROMPT_FILE env."""
+    path = os.getenv("LLM_TRIPLE_PROMPT_FILE")
+    if path and Path(path).is_file():
+        return Path(path).read_text(encoding="utf-8")
+    return DEFAULT_TRIPLE_EXTRACTOR_PROMPT

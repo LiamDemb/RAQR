@@ -4,6 +4,8 @@ import argparse
 import json
 import logging
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, List
 
@@ -13,7 +15,7 @@ from dotenv import load_dotenv
 from raqr.data.build_faiss import build_faiss_index
 from raqr.data.build_graph import build_graph
 from raqr.data.alias_map import CURATED_ALIASES, build_alias_map_from_redirects, normalize_alias_map
-from raqr.data.canonical_clean import clean_html_to_structured_doc
+from raqr.data.canonical_clean import clean_html_to_structured_doc, normalize_text_for_extraction
 from raqr.data.chunking import chunk_blocks
 from raqr.data.corpus_acquisition import (
     Budgets,
@@ -30,6 +32,7 @@ from raqr.data.enrich_entities import (
     should_use_noun_chunks,
 )
 from raqr.data.enrich_relations import extract_relations_rebel, load_rebel
+from raqr.data.llm_relations import LLMTripleExtractor
 from raqr.data.enrich_years import aggregate_year_fields, extract_years
 from raqr.data.entity_lexicon import build_entity_lexicon
 from raqr.data.quality_gates import run_quality_gates
@@ -335,8 +338,9 @@ def main() -> int:
         ):
             years = extract_years(piece.text)
             year_fields = aggregate_year_fields(years, piece.text, piece.token_count)
+            text_for_extraction = normalize_text_for_extraction(piece.text)
             entities = extract_entities_spacy(
-                piece.text,
+                text_for_extraction,
                 nlp,
                 alias_map,
                 use_noun_chunks=noun_chunks_enabled,
@@ -365,18 +369,37 @@ def main() -> int:
             )
             chunk_json = chunk.to_json()
             chunks.append(chunk_json)
-            chunk_texts.append(piece.text)
+            chunk_texts.append(text_for_extraction)
 
-    relations_by_chunk = extract_relations_rebel(
-        chunk_texts,
-        rebel_tokenizer,
-        rebel_model,
-        rebel_device,
-        alias_map=alias_map,
-        batch_size=args.re_batch_size,
-        max_input_tokens=args.re_max_input_tokens,
-        max_new_tokens=args.re_max_new_tokens,
-    )
+    relation_extractor = (os.getenv("RELATION_EXTRACTOR", "rebel") or "rebel").strip().lower()
+    if relation_extractor == "llm":
+        logger.info("Relation extraction: using LLMTripleExtractor (sync, no batch)")
+        llm_ext = LLMTripleExtractor()
+        relations_by_chunk = []
+        for idx, text in enumerate(chunk_texts):
+            chunk_id = chunks[idx].get("chunk_id") if idx < len(chunks) else None
+            try:
+                rels = llm_ext.extract(text, chunk_id=chunk_id, alias_map=alias_map)
+            except Exception as e:
+                logger.warning("LLM triple extraction failed for chunk %s: %s", idx, e)
+                rels = []
+            relations_by_chunk.append(rels)
+    elif relation_extractor == "llm-batch":
+        logger.info("Relation extraction: llm-batch mode - skipping extraction, corpus will be enriched via batch API later")
+        relations_by_chunk = [[] for _ in chunk_texts]
+    else:
+        if relation_extractor != "rebel":
+            logger.info("RELATION_EXTRACTOR=%r unknown, defaulting to rebel", relation_extractor)
+        relations_by_chunk = extract_relations_rebel(
+            chunk_texts,
+            rebel_tokenizer,
+            rebel_model,
+            rebel_device,
+            alias_map=alias_map,
+            batch_size=args.re_batch_size,
+            max_input_tokens=args.re_max_input_tokens,
+            max_new_tokens=args.re_max_new_tokens,
+        )
     for idx, rels in enumerate(relations_by_chunk):
         chunks[idx].setdefault("metadata", {})["relations"] = rels
 
@@ -390,9 +413,10 @@ def main() -> int:
         model_name=args.model_name,
     )
 
-    graph = build_graph(chunks)
-    graph_path = output_dir / "graph.pkl"
-    pd.to_pickle(graph, graph_path)
+    if relation_extractor != "llm-batch":
+        graph = build_graph(chunks)
+        graph_path = output_dir / "graph.pkl"
+        pd.to_pickle(graph, graph_path)
 
     lexicon = build_entity_lexicon(chunks)
     lexicon_path = output_dir / "entity_lexicon.parquet"
@@ -403,6 +427,21 @@ def main() -> int:
         chunks,
         output_path=(output_dir / "quality_report.json").as_posix(),
     )
+
+    if relation_extractor == "llm-batch":
+        submit_script = Path(__file__).resolve().parent / "corpus" / "submit_llm_triple_batch.py"
+        if not submit_script.is_file():
+            logger.error("Submit script not found: %s", submit_script)
+            return 1
+        logger.info("Submitting LLM triple extraction batch job...")
+        result = subprocess.run(
+            [sys.executable, str(submit_script), "--corpus", str(corpus_path), "--output-dir", str(output_dir)],
+            cwd=str(Path(__file__).resolve().parent.parent),
+        )
+        if result.returncode != 0:
+            logger.error("Batch submit failed with exit code %d", result.returncode)
+            return result.returncode
+        logger.info("Batch job submitted. Run 'make collect-and-build-graph' when complete.")
 
     logger.info("Wrote corpus and artifacts to %s", output_dir)
     docstore.close()

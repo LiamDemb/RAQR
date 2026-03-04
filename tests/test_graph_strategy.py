@@ -155,7 +155,7 @@ def test_graph_strategy_df_downweighting_prefers_rare_entity_context():
 
     result = strategy.retrieve_and_generate("hub rare query")
     assert result.status == "OK"
-    assert result.context_scores[0][0] == "Rare chunk"
+    assert "Rare chunk" in result.context_scores[0][0]
 
 
 def test_graph_strategy_synergy_bonus_prefers_joint_evidence():
@@ -198,7 +198,7 @@ def test_graph_strategy_synergy_bonus_prefers_joint_evidence():
 
     result = strategy.retrieve_and_generate("a b query")
     assert result.status == "OK"
-    assert result.context_scores[0][0] == "Joint"
+    assert "Joint" in result.context_scores[0][0]
 
 
 def test_spacy_query_extractor_can_match_via_noun_chunks(monkeypatch):

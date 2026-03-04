@@ -141,3 +141,11 @@ _This ensures our router is trained to be efficient, not just accuracy-obsessed.
 **Embedder (all-MiniLM-L6-v2):** Truncates at 256 tokens internally. No configuration needed.
 
 **Chunking:** Uses REBEL BPE tokenizer. Default 500–800 tokens per chunk. Chunks are guaranteed under 1024; configurable via `CHUNK_MIN_TOKENS`, `CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`.
+
+**Relation extractor (`RELATION_EXTRACTOR` env var):**
+
+| Value | Behaviour |
+|-------|-----------|
+| `rebel` (default) | REBEL extraction during corpus build. Full graph produced. |
+| `llm` | Synchronous LLM extraction per chunk during build. No batch API. |
+| `llm-batch` | Build corpus without triple extraction (chunks + entities only). Batch job is auto-submitted when build finishes. Run `make collect-and-build-graph` when the batch completes to merge LLM triples and rebuild the graph. |

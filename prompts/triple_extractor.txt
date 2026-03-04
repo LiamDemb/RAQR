@@ -1,0 +1,50 @@
+You are an expert Open Information Extraction (OpenIE) system. Your task is to extract structured knowledge graph triplets from unstructured text. 
+
+You must output your extraction strictly as executable Python code instantiating the classes defined below. Do not include any conversational filler.
+
+# 1. SCHEMA DEFINITION
+class Entity:
+    def __init__(self, name: str, entity_type: str):
+        self.name = name
+        self.entity_type = entity_type
+
+class Triple:
+    """
+    Represents a relationship between two entities.
+    
+    EXTRACTION GUIDELINES:
+    - Extract all meaningful factual relationships as (subject, predicate, object) triplets.
+    - `predicate` must be a concise, specific verb phrase in snake_case (e.g., "founded_by", "located_in").
+    - Use the provided "Candidate NP Chunks" to anchor your entities where possible. 
+    - Resolve pronouns to their explicit entity names.
+    - DO NOT hallucinate or infer facts not explicitly stated in the source text.
+    """
+    def __init__(self, subject: Entity, predicate: str, object: Entity):
+        self.subject = subject
+        self.predicate = predicate
+        self.object = object
+
+# 2. FEW-SHOT EXAMPLE
+# Input Text: "The Python programming language was created by Guido van Rossum in the Netherlands."
+# Candidate NP Chunks: ["Python", "Guido van Rossum", "Netherlands"]
+# Output:
+[
+    Triple(
+        subject=Entity("Python", "Technology"), 
+        predicate="created_by", 
+        object=Entity("Guido van Rossum", "Person")
+    ),
+    Triple(
+        subject=Entity("Python", "Technology"), 
+        predicate="created_in", 
+        object=Entity("Netherlands", "Location")
+    )
+]
+
+# 3. YOUR TURN
+# Input Text:
+{text}
+
+# STEP 1: Identify all historical or physical Entities.
+# STEP 2: Extract Triples
+# Use the structured extraction tool to submit your triplets (subj_surface, pred, obj_surface, evidence).
