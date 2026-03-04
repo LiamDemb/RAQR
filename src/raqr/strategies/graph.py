@@ -4,7 +4,8 @@ import math
 import os
 import time
 import logging
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 
 import networkx as nx
@@ -69,6 +70,10 @@ class GraphStrategy(BaseStrategy):
     start_entity_weight: float = float(os.getenv("GRAPH_START_ENTITY_WEIGHT", "2.0"))
     expanded_entity_weight: float = float(os.getenv("GRAPH_EXPANDED_ENTITY_WEIGHT", "1.0"))
     synergy_gamma: float = float(os.getenv("GRAPH_SYNERGY_GAMMA", "0.5"))
+    bidirectional: bool = field(
+        default_factory=lambda: os.getenv("GRAPH_BIDIRECTIONAL", "false").lower()
+        in ("1", "true", "yes")
+    )
 
     _graph: Optional[nx.DiGraph] = None
     _queries_seen: int = 0
@@ -93,10 +98,11 @@ class GraphStrategy(BaseStrategy):
             return set(start_nodes)
 
         frontier = set(start_nodes)
-        visited = set(start_nodes)
+        visited = set(start_nodes)  # Prevents backtracking: never re-enter A after A→B
         for _ in range(self.max_hops):
             next_frontier: Set[str] = set()
             for source in frontier:
+                # Forward: follow outgoing relation edges
                 for _, target, data in self._graph.out_edges(source, data=True):
                     if data.get("kind") != "rel":
                         continue
@@ -104,9 +110,22 @@ class GraphStrategy(BaseStrategy):
                         continue
                     if rel_edges is not None:
                         rel_edges.append((source, target, str(data.get("label") or "")))
-                    if target not in visited:
+                    if target not in visited:  # Skip: prevents A→B→A backtracking
                         visited.add(target)
                         next_frontier.add(target)
+                # Backward: follow incoming relation edges when bidirectional
+                if self.bidirectional:
+                    for neighbor, _, data in self._graph.in_edges(source, data=True):
+                        if data.get("kind") != "rel":
+                            continue
+                        if self._graph.nodes.get(neighbor, {}).get("kind") != "entity":
+                            continue
+                        if rel_edges is not None:
+                            label = str(data.get("label") or "")
+                            rel_edges.append((source, neighbor, f"inv:{label}"))
+                        if neighbor not in visited:  # Skip: prevents A→B→A backtracking
+                            visited.add(neighbor)
+                            next_frontier.add(neighbor)
             frontier = next_frontier
             if not frontier:
                 break
@@ -120,6 +139,79 @@ class GraphStrategy(BaseStrategy):
         if df < 0:
             df = 0
         return 1.0 / math.sqrt(1.0 + float(df))
+
+    @staticmethod
+    def _entity_display(name: str) -> str:
+        """Strip E: prefix for readable path formatting."""
+        return name[2:] if name.startswith("E:") else name
+
+    def _get_paths_to_entities(
+        self,
+        start_nodes: Set[str],
+        rel_edges: List[Tuple[str, str, str]],
+    ) -> Dict[str, List[str]]:
+        """Build shortest path from each start to each entity reachable via rel_edges.
+        Returns entity_node -> list of path strings (one per start that reaches it).
+        """
+        if not rel_edges:
+            return {n: [self._entity_display(n)] for n in start_nodes}
+        # Build adjacency: source -> [(target, label), ...]
+        adj: Dict[str, List[Tuple[str, str]]] = {}
+        for source, target, label in rel_edges:
+            adj.setdefault(source, []).append((target, label))
+        result: Dict[str, List[str]] = {}
+        for start in start_nodes:
+            # BFS from start, store (parent, edge_label) for backtracking
+            prev: Dict[str, Tuple[str, str]] = {}  # node -> (parent, label)
+            queue: deque = deque([start])
+            prev[start] = (start, "")  # sentinel
+            while queue:
+                node = queue.popleft()
+                for target, label in adj.get(node, []):
+                    if target not in prev:
+                        prev[target] = (node, label)
+                        queue.append(target)
+            for entity, (parent, label) in prev.items():
+                if entity == start:
+                    path_str = self._entity_display(start)
+                else:
+                    # Backtrack to build chain: start -[l1]-> n1 -[l2]-> ... -> entity
+                    chain: List[Tuple[str, str]] = []  # (label, node)
+                    cur = entity
+                    while cur in prev:
+                        p, l = prev[cur]
+                        if p == cur:
+                            break
+                        chain.append((l, cur))
+                        cur = p
+                    # Format: start -[l1]-> n1 -[l2]-> n2 ...
+                    segs = [self._entity_display(start)]
+                    for l, n in reversed(chain):
+                        segs.append(f"-[{l}]-> {self._entity_display(n)}")
+                    path_str = " ".join(segs)
+                result.setdefault(entity, []).append(path_str)
+        return result
+
+    def _format_chunk_with_paths(
+        self,
+        chunk_id: str,
+        text: str,
+        chunk_to_entities: Dict[str, Set[str]],
+        entity_paths: Dict[str, List[str]],
+    ) -> str:
+        """Prepend path metadata to chunk text for generator context."""
+        entities = chunk_to_entities.get(chunk_id, set())
+        paths: List[str] = []
+        seen: Set[str] = set()
+        for entity in entities:
+            for path_str in entity_paths.get(entity, [self._entity_display(entity)]):
+                if path_str not in seen:
+                    seen.add(path_str)
+                    paths.append(path_str)
+        if not paths:
+            return text
+        prefix = "Relevant because: " + "; ".join(paths[:3])  # cap at 3 paths
+        return f"[{prefix}]\n\n{text}"
 
     def retrieve_and_generate(self, query: str, **kwargs) -> StrategyResult:
         t0 = time.perf_counter()
@@ -165,7 +257,7 @@ class GraphStrategy(BaseStrategy):
                     debug_info=debug_info,
                 )
 
-            rel_edges: Optional[List[Tuple[str, str, str]]] = [] if debug_info is not None else None
+            rel_edges: List[Tuple[str, str, str]] = []
             expanded_nodes = self._expand_relational_entities(start_nodes, rel_edges=rel_edges)
             if debug_info is not None:
                 debug_info["expanded_nodes"] = sorted(expanded_nodes)
@@ -175,6 +267,7 @@ class GraphStrategy(BaseStrategy):
                 ]
             chunk_scores: Dict[str, float] = {}
             chunk_start_support: Dict[str, Set[str]] = {}
+            chunk_to_entities: Dict[str, Set[str]] = {}
             for entity_node in expanded_nodes:
                 role_weight = (
                     self.start_entity_weight
@@ -189,6 +282,7 @@ class GraphStrategy(BaseStrategy):
                     if not chunk_id:
                         continue
                     chunk_scores[chunk_id] = chunk_scores.get(chunk_id, 0.0) + weighted_vote
+                    chunk_to_entities.setdefault(chunk_id, set()).add(entity_node)
                     if entity_node in start_nodes:
                         entity_norm = entity_node[2:] if entity_node.startswith("E:") else entity_node
                         chunk_start_support.setdefault(chunk_id, set()).add(entity_norm)
@@ -222,12 +316,16 @@ class GraphStrategy(BaseStrategy):
                     }
                     for chunk_id, score in ranked_chunks
                 ]
+            entity_paths = self._get_paths_to_entities(start_nodes, rel_edges)
             pairs: List[Tuple[str, float]] = []
             for chunk_id, score in ranked_chunks:
                 text = self.corpus.get_text(chunk_id)
                 if not text:
                     continue
-                pairs.append((text, float(score)))
+                formatted = self._format_chunk_with_paths(
+                    chunk_id, text, chunk_to_entities, entity_paths
+                )
+                pairs.append((formatted, float(score)))
                 if len(pairs) >= self.top_k:
                     break
 
