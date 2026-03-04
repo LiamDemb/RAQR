@@ -147,5 +147,4 @@ _This ensures our router is trained to be efficient, not just accuracy-obsessed.
 | Value | Behaviour |
 |-------|-----------|
 | `rebel` (default) | REBEL extraction during corpus build. Full graph produced. |
-| `llm` | Synchronous LLM extraction per chunk during build. No batch API. |
-| `llm-batch` | Build corpus without triple extraction (chunks + entities only). Batch job is auto-submitted when build finishes. Run `make collect-and-build-graph` when the batch completes to merge LLM triples and rebuild the graph. |
+| `llm-batch` | Two-stage LLM extraction (Discovery → Validation) via OpenAI Batch API. Builds base corpus, submits Stage 1, waits (poll 10 min), collects candidates, submits Stage 2, waits, merges into a temp file, rebuilds `graph.pkl`, then atomically replaces `corpus.jsonl` with the enriched content (no redundant storage). Blocks until complete (or timeout 48h). |

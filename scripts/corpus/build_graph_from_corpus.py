@@ -1,9 +1,10 @@
 """Rebuild graph pickle from a corpus.jsonl file.
 
 Usage:
-    poetry run python scripts/corpus/build_graph_from_corpus.py --corpus data/processed/corpus_llm.jsonl --graph-out data/processed/graph_llm.pkl
+    poetry run python scripts/corpus/build_graph_from_corpus.py --corpus data/processed/corpus.jsonl --graph-out data/processed/graph.pkl
 
-Use after collect_llm_triple_batch.py to produce graph_llm.pkl from the LLM-enriched corpus.
+Use after LLM batch extraction (the orchestrator runs this automatically). The final corpus.jsonl
+contains LLM-enriched relations; pass it here to rebuild the graph.
 """
 
 from __future__ import annotations

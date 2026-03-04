@@ -1,13 +1,11 @@
-"""Collect OpenAI Batch API results for LLM triple extraction and merge into corpus.
+"""Collect Stage 1 (Discovery) Batch API results and write candidates for Stage 2.
 
 Usage:
-    poetry run python scripts/corpus/collect_llm_triple_batch.py --batch-id batch_xxx --corpus data/processed/corpus.jsonl --output data/processed/corpus_llm.jsonl
-    poetry run python scripts/corpus/collect_llm_triple_batch.py --state data/processed/batch_state.json --corpus data/processed/corpus.jsonl
+    poetry run python scripts/corpus/collect_llm_triple_batch_stage1.py --state data/processed/batch_state_stage1.json
+    poetry run python scripts/corpus/collect_llm_triple_batch_stage1.py --batch-id batch_xxx
 
-Downloads batch output, parses tool-call responses, normalizes triples with alias_map,
-and writes the enriched corpus (default: corpus_llm.jsonl) with metadata.relations populated.
-When run via the two-stage orchestrator, that file is atomically replaced into corpus.jsonl.
-Run after the batch has completed (check status first if unsure).
+Downloads Stage 1 batch output, parses tool-call responses, and writes
+llm_candidates_stage1.jsonl (chunk_id -> raw_triples) for Stage 2 submission.
 """
 
 from __future__ import annotations
@@ -21,7 +19,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from raqr.data.llm_relations import _post_process_raw_triples, parse_batch_output_line
+from raqr.data.llm_relations import parse_batch_output_line
 
 load_dotenv()
 
@@ -39,7 +37,7 @@ def _iter_jsonl(path: Path):
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Collect Batch API results and merge LLM triples into corpus.",
+        description="Collect Stage 1 Batch API results and write candidates for Stage 2.",
     )
     parser.add_argument(
         "--batch-id",
@@ -47,22 +45,17 @@ def main() -> int:
     )
     parser.add_argument(
         "--state",
-        help="Path to batch_state.json from submit script.",
+        help="Path to batch_state_stage1.json from submit script.",
     )
     parser.add_argument(
         "--corpus",
         required=True,
-        help="Path to corpus.jsonl (same as used for submit).",
-    )
-    parser.add_argument(
-        "--output",
-        default=None,
-        help="Output corpus path (default: <output-dir>/corpus_llm.jsonl; orchestrator replaces into corpus.jsonl).",
+        help="Path to corpus.jsonl (same as used for Stage 1 submit).",
     )
     parser.add_argument(
         "--output-dir",
         default=os.getenv("OUTPUT_DIR", "data/processed"),
-        help="Directory for alias_map.json and default output path.",
+        help="Directory for llm_candidates_stage1.jsonl.",
     )
     args = parser.parse_args()
 
@@ -90,15 +83,8 @@ def main() -> int:
         return 1
 
     output_dir = Path(args.output_dir)
-    output_path = Path(args.output) if args.output else output_dir / "corpus_llm.jsonl"
+    output_path = output_dir / "llm_candidates_stage1.jsonl"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    alias_map: dict = {}
-    alias_path = output_dir / "alias_map.json"
-    if alias_path.is_file():
-        with alias_path.open("r", encoding="utf-8") as f:
-            alias_map = json.load(f)
-        logger.info("Loaded alias_map from %s", alias_path)
 
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -171,32 +157,21 @@ def main() -> int:
         except Exception as e:
             logger.warning("Could not fetch error file: %s", e)
 
-    total_requests = completed + failed
-    empty_count = 0
-    total_triples = 0
-
-    logger.info("Merging triples into corpus...")
+    logger.info("Writing candidates to %s...", output_path)
     with output_path.open("w", encoding="utf-8") as out:
         for chunk in _iter_jsonl(corpus_path):
             chunk_id = chunk.get("chunk_id") or ""
             raw_triples = raw_by_id.get(chunk_id, [])
-            text = chunk.get("text") or ""
+            row = {"chunk_id": chunk_id, "raw_triples": raw_triples}
+            out.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-            triples = _post_process_raw_triples(raw_triples, text, alias_map, chunk_id)
-            if not triples:
-                empty_count += 1
-            total_triples += len(triples)
-
-            chunk = dict(chunk)
-            chunk.setdefault("metadata", {})["relations"] = triples
-            out.write(json.dumps(chunk, ensure_ascii=False) + "\n")
-
-    logger.info("Wrote %s", output_path)
+    total_with_candidates = sum(1 for r in raw_by_id.values() if r)
+    total_triples = sum(len(r) for r in raw_by_id.values())
     logger.info(
-        "Summary: requests completed=%d failed=%d; chunks with 0 triples=%d; total triples=%d",
+        "Stage 1 collect done: completed=%d failed=%d; chunks with candidates=%d; total triples=%d",
         completed,
         failed,
-        empty_count,
+        total_with_candidates,
         total_triples,
     )
     print(f"Output: {output_path}")

@@ -1,13 +1,12 @@
-"""Collect OpenAI Batch API results for LLM triple extraction and merge into corpus.
+"""Collect Stage 2 (Validation) Batch API results and merge validated triples into corpus.
 
 Usage:
-    poetry run python scripts/corpus/collect_llm_triple_batch.py --batch-id batch_xxx --corpus data/processed/corpus.jsonl --output data/processed/corpus_llm.jsonl
-    poetry run python scripts/corpus/collect_llm_triple_batch.py --state data/processed/batch_state.json --corpus data/processed/corpus.jsonl
+    poetry run python scripts/corpus/collect_llm_triple_batch_stage2.py --state data/processed/batch_state_stage2.json --corpus data/processed/corpus.jsonl
+    poetry run python scripts/corpus/collect_llm_triple_batch_stage2.py --batch-id batch_xxx --corpus data/processed/corpus.jsonl
 
-Downloads batch output, parses tool-call responses, normalizes triples with alias_map,
-and writes the enriched corpus (default: corpus_llm.jsonl) with metadata.relations populated.
-When run via the two-stage orchestrator, that file is atomically replaced into corpus.jsonl.
-Run after the batch has completed (check status first if unsure).
+Downloads Stage 2 batch output, parses validated triples, runs post-processing,
+and writes the enriched corpus (default: corpus_llm.jsonl). When run via the two-stage
+orchestrator, that file is atomically replaced into corpus.jsonl.
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ def _iter_jsonl(path: Path):
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Collect Batch API results and merge LLM triples into corpus.",
+        description="Collect Stage 2 Batch API results and merge validated triples into corpus.",
     )
     parser.add_argument(
         "--batch-id",
@@ -47,12 +46,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--state",
-        help="Path to batch_state.json from submit script.",
+        help="Path to batch_state_stage2.json from submit script.",
     )
     parser.add_argument(
         "--corpus",
         required=True,
-        help="Path to corpus.jsonl (same as used for submit).",
+        help="Path to corpus.jsonl (same as used for Stage 1/2 submit).",
     )
     parser.add_argument(
         "--output",
@@ -171,11 +170,10 @@ def main() -> int:
         except Exception as e:
             logger.warning("Could not fetch error file: %s", e)
 
-    total_requests = completed + failed
     empty_count = 0
     total_triples = 0
 
-    logger.info("Merging triples into corpus...")
+    logger.info("Merging validated triples into corpus...")
     with output_path.open("w", encoding="utf-8") as out:
         for chunk in _iter_jsonl(corpus_path):
             chunk_id = chunk.get("chunk_id") or ""

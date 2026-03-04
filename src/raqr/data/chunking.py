@@ -68,8 +68,8 @@ def _split_long_block(
 def chunk_blocks(
     blocks: Sequence[Block],
     tokenizer: PreTrainedTokenizerBase,
-    min_tokens: int = 500,
-    max_tokens: int = 800,
+    min_tokens: int = 0,
+    max_tokens: int = 500,
     overlap_tokens: int = 100,
 ) -> List[ChunkPiece]:
     """Chunk blocks by BPE token count.

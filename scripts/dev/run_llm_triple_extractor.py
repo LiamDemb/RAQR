@@ -1,4 +1,7 @@
-"""Run LLM-based triple extraction on chunk text and print triples + evidence.
+"""Run two-stage LLM triple extraction (Discovery -> Validation) on a single input.
+
+For dev/testing: runs the same Discovery and Validation prompts synchronously
+on one piece of text and prints Stage 1 candidates and Stage 2 validated triples.
 
 Usage:
     poetry run python scripts/dev/run_llm_triple_extractor.py "Eva Busch was a German cabaret artist."
@@ -24,13 +27,18 @@ load_dotenv()
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run LLM-based triple extraction on chunk text and print triples + evidence.",
+        description="Run two-stage LLM triple extraction (Discovery -> Validation) on a single input.",
     )
     parser.add_argument("text", nargs="?", help="Input text. Reads from stdin or --text-file if omitted.")
     parser.add_argument(
         "--text-file",
         metavar="PATH",
         help="Load input text from file instead of positional arg or stdin.",
+    )
+    parser.add_argument(
+        "--title",
+        default="N/A",
+        help="Page title for context (default: N/A).",
     )
     parser.add_argument(
         "--output-dir",
@@ -45,7 +53,7 @@ def main() -> int:
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Show extra trace info (raw tool args, normalization warnings).",
+        help="Show extra trace info.",
     )
     args = parser.parse_args()
 
@@ -65,17 +73,45 @@ def main() -> int:
         return 1
 
     alias_map: dict = {}
-    alias_path = f"{args.output_dir}/alias_map.json"
-    if os.path.isfile(alias_path):
-        with open(alias_path, encoding="utf-8") as f:
+    alias_path = Path(args.output_dir) / "alias_map.json"
+    if alias_path.is_file():
+        with alias_path.open(encoding="utf-8") as f:
             alias_map = json.load(f)
 
-    from raqr.data.llm_relations import LLMTripleExtractor
+    from raqr.data.llm_relations import call_llm_for_triples, _post_process_raw_triples
+    from raqr.data.canonical_clean import normalize_text_for_extraction
+    from raqr.prompts import get_triple_discovery_prompt, get_triple_validation_prompt
 
-    ext = LLMTripleExtractor()
-    triples = ext.extract(text, alias_map=alias_map, debug=args.debug)
+    text_norm = normalize_text_for_extraction(text)
+    discovery_prompt = get_triple_discovery_prompt()
+    validation_prompt = get_triple_validation_prompt()
 
-    print(f"Triples ({len(triples)}):")
+    print("Stage 1 (Discovery)...")
+    raw_candidates = call_llm_for_triples(
+        discovery_prompt.format(title=args.title, text=text_norm)
+    )
+    print(f"  Candidates: {len(raw_candidates)}")
+    if args.debug and raw_candidates:
+        for t in raw_candidates:
+            print(f"    {t.get('subj_surface')} --[{t.get('pred')}]--> {t.get('obj_surface')}")
+
+    if not raw_candidates:
+        print("Stage 2 (Validation): no candidates to validate.")
+        print("Triples (final): 0")
+        return 0
+
+    print("Stage 2 (Validation)...")
+    candidates_json = json.dumps(raw_candidates, ensure_ascii=False)
+    raw_validated = call_llm_for_triples(
+        validation_prompt.format(
+            title=args.title,
+            text=text_norm,
+            candidates_from_stage_1=candidates_json,
+        )
+    )
+    triples = _post_process_raw_triples(raw_validated, text, alias_map, None, debug=args.debug)
+
+    print(f"\nTriples (validated, {len(triples)}):")
     if not triples:
         print("  (none)")
     elif args.json:

@@ -105,10 +105,72 @@ def get_judge_prompt() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Triple extractor prompt (used by LLMTripleExtractor for relation extraction)
+# Triple extractor prompts (Discovery + Validation for two-stage LLM batch extraction)
 # ---------------------------------------------------------------------------
 
-DEFAULT_TRIPLE_EXTRACTOR_PROMPT = """You are a relation extractor. Extract factual subject-predicate-object triples from the given text.
+def _load_prompt_from_file(env_var: str, default_path: str) -> str:
+    """Load prompt from env-specified path or project default."""
+    path = os.getenv(env_var)
+    if path and Path(path).is_file():
+        return Path(path).read_text(encoding="utf-8")
+    project_root = Path(__file__).resolve().parent.parent.parent
+    default_full = project_root / default_path
+    if default_full.is_file():
+        return default_full.read_text(encoding="utf-8")
+    return ""
+
+
+DEFAULT_DISCOVERY_PROMPT = """You are a High-Recall Information Extraction system.
+
+YOUR TASK: Extract every potential knowledge graph triple from the text. Output via the structured tool.
+
+STRATEGY: Process sentence-by-sentence. For every pair of entities, scan the ENTIRE context. Capture in-between, inverted, and post-positioned relations.
+
+GROUNDING: Subject and Object must be verbatim from text. Predicate = snake_case. Include evidence when possible.
+
+PAGE TITLE: {title}
+
+INPUT TEXT:
+{text}
+
+Output triples via the tool (subj_surface, pred, obj_surface, confidence 0-1, evidence)."""
+
+
+DEFAULT_VALIDATION_PROMPT = """You are an expert Knowledge Graph Validator.
+
+YOUR TASK: Filter the candidate triples. Keep only those explicitly supported by the text. Output via the structured tool.
+
+RULES: subject/object must be verbatim from text. evidence is REQUIRED - exact quote. No inference.
+
+PAGE TITLE: {title}
+
+ORIGINAL TEXT:
+{text}
+
+CANDIDATE TRIPLES:
+{candidates_from_stage_1}
+
+Output validated triples via the tool (subj_surface, pred, obj_surface, confidence 0-1, evidence)."""
+
+
+def get_triple_discovery_prompt() -> str:
+    """Return the Stage 1 (Discovery) prompt template. Override via LLM_TRIPLE_DISCOVERY_PROMPT_FILE env."""
+    s = _load_prompt_from_file("LLM_TRIPLE_DISCOVERY_PROMPT_FILE", "prompts/discovery.txt")
+    return s.strip() if s else DEFAULT_DISCOVERY_PROMPT
+
+
+def get_triple_validation_prompt() -> str:
+    """Return the Stage 2 (Validation) prompt template. Override via LLM_TRIPLE_VALIDATION_PROMPT_FILE env."""
+    s = _load_prompt_from_file("LLM_TRIPLE_VALIDATION_PROMPT_FILE", "prompts/validation.txt")
+    return s.strip() if s else DEFAULT_VALIDATION_PROMPT
+
+
+def get_triple_extractor_prompt() -> str:
+    """Return the legacy single-stage prompt. Override via LLM_TRIPLE_PROMPT_FILE env. Used only for dev script."""
+    path = os.getenv("LLM_TRIPLE_PROMPT_FILE")
+    if path and Path(path).is_file():
+        return Path(path).read_text(encoding="utf-8")
+    return """You are a relation extractor. Extract factual subject-predicate-object triples from the given text.
 
 TASK: From the text below, identify triples where:
 - subject: a named entity (person, organization, place, event, work, etc.)
@@ -118,18 +180,9 @@ TASK: From the text below, identify triples where:
 RULES:
 - Extract only triples explicitly stated or strongly implied in the text. Do not infer or hallucinate.
 - Use concise, normalized predicates (snake_case, e.g., occupation, born_in, member_of).
-- For dates, use predicates like born_in, died_in, founded_in; objects can be years or full dates.
 - Quote the exact evidence snippet from the text in the "evidence" field.
 
 INPUT TEXT:
 {text}
 
 Output your extracted triples via the structured tool (each triple: subj_surface, pred, obj_surface, confidence 0-1, evidence)."""
-
-
-def get_triple_extractor_prompt() -> str:
-    """Return the triple extractor prompt template. Override via LLM_TRIPLE_PROMPT_FILE env."""
-    path = os.getenv("LLM_TRIPLE_PROMPT_FILE")
-    if path and Path(path).is_file():
-        return Path(path).read_text(encoding="utf-8")
-    return DEFAULT_TRIPLE_EXTRACTOR_PROMPT

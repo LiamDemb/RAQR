@@ -161,13 +161,14 @@ class LLMTripleExtractor:
         """Call the LLM and return raw triples from tool-call args. Overridable for testing."""
         prompt = self.prompt_template.format(text=text)
         client = self._get_client()
+
         response = client.chat.completions.create(
-            model=self.model_id,
-            messages=[{"role": "user", "content": prompt}],
-            tools=[_EXTRACT_TRIPLES_TOOL],
-            tool_choice={"type": "function", "function": {"name": "extract_triples"}},
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
+        model=self.model_id,
+        messages=[{"role": "user", "content": prompt}],
+        tools=[_EXTRACT_TRIPLES_TOOL],
+        tool_choice={"type": "function", "function": {"name": "extract_triples"}},
+        temperature=self.temperature,
+        max_tokens=self.max_tokens,
         )
 
         raw_triples: List[Dict[str, Any]] = []
@@ -203,6 +204,36 @@ class LLMTripleExtractor:
 # ---------------------------------------------------------------------------
 # Batch API helpers
 # ---------------------------------------------------------------------------
+
+
+def call_llm_for_triples(prompt: str) -> List[Dict[str, Any]]:
+    """Call LLM with prompt and return raw triples from extract_triples tool. Used for dev two-step runner."""
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    model_id = os.getenv("LLM_TRIPLE_MODEL", "gpt-4o-mini")
+    temperature = float(os.getenv("LLM_TRIPLE_TEMPERATURE", "0"))
+    max_tokens = int(os.getenv("LLM_TRIPLE_MAX_TOKENS", "2048"))
+
+    response = client.chat.completions.create(
+    model=model_id,
+    messages=[{"role": "user", "content": prompt}],
+    tools=[_EXTRACT_TRIPLES_TOOL],
+    tool_choice={"type": "function", "function": {"name": "extract_triples"}},
+    temperature=temperature,
+    max_tokens=max_tokens,
+    )
+    
+    raw_triples: List[Dict[str, Any]] = []
+    msg = response.choices[0].message if response.choices else None
+    if msg and msg.tool_calls:
+        for tc in msg.tool_calls:
+            if getattr(tc, "function", None) and getattr(tc.function, "name", None) == "extract_triples":
+                args_str = getattr(tc.function, "arguments", None) or "{}"
+                try:
+                    args = json.loads(args_str)
+                    raw_triples.extend(args.get("triples", []))
+                except json.JSONDecodeError as e:
+                    logger.warning("Failed to parse extract_triples args: %s", e)
+    return raw_triples
 
 
 def build_chat_completion_request(
