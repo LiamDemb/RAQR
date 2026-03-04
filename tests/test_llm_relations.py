@@ -124,6 +124,38 @@ def test_post_process_confidence_clamped() -> None:
     assert out[1]["confidence"] == 0.0
 
 
+def test_post_process_add_both_alias_and_raw_when_different() -> None:
+    """When add_both_alias_and_raw=True and alias changes subj/obj, emit both triples."""
+    raw = [{"subj_surface": "Eva Busch", "pred": "occupation", "obj_surface": "cabaret artist", "evidence": ""}]
+    alias_map = {"cabaret artist": "cabaret"}
+    text = "Eva Busch was a cabaret artist."
+    out = _post_process_raw_triples(raw, text, alias_map, None, add_both_alias_and_raw=True)
+    assert len(out) == 2
+    aliased = next(r for r in out if r["obj_norm"] == "cabaret")
+    raw_rec = next(r for r in out if r["obj_norm"] == "cabaret artist")
+    assert aliased["subj_norm"] == "eva busch"
+    assert raw_rec["subj_norm"] == "eva busch"
+    assert raw_rec["pred"] == "occupation"
+
+
+def test_post_process_add_both_off_by_default() -> None:
+    """Default behavior: only aliased triple, no raw when add_both is False."""
+    raw = [{"subj_surface": "Eva Busch", "pred": "occupation", "obj_surface": "cabaret artist", "evidence": ""}]
+    alias_map = {"cabaret artist": "cabaret"}
+    out = _post_process_raw_triples(raw, "text", alias_map, None, add_both_alias_and_raw=False)
+    assert len(out) == 1
+    assert out[0]["obj_norm"] == "cabaret"
+
+
+def test_post_process_add_both_no_duplicate_when_same() -> None:
+    """When alias does not change subj/obj, only one triple even with add_both=True."""
+    raw = [{"subj_surface": "Eva Busch", "pred": "occupation", "obj_surface": "singer", "evidence": ""}]
+    alias_map = {}  # no alias for singer
+    out = _post_process_raw_triples(raw, "text", alias_map, None, add_both_alias_and_raw=True)
+    assert len(out) == 1
+    assert out[0]["obj_norm"] == "singer"
+
+
 # ---------------------------------------------------------------------------
 # LLMTripleExtractor with mocked _call_llm
 # ---------------------------------------------------------------------------

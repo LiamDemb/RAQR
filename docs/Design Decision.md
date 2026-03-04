@@ -19,12 +19,12 @@ The Heuristic Router is implemented as a **Priority Cascade**. It evaluates rule
 
 _Implement these exact logic gates in `src/routers/heuristic.py`._
 
-| Priority | Check Type | Condition (Pseudocode) | Route To | Rationale |
-| :--- | :--- | :--- | :--- | :--- |
-| **1** | Regex | `matches(query, r\"(from|between|in) \\d{4}\")` OR `contains(query, \"timeline\", \"history of\")` | **Temporal RAG** | Explicit date constraints. |
-| **2** | Regex | `contains(query, \"connection between\", \"relationship\", \"how does X affect Y\")` | **Graph RAG** | Multi-hop reasoning intent. |
-| **3** | Signal | `Probe.skewness < 0.5` AND `Probe.max_score > 0.65` | **Graph RAG** | Flat distribution implies multiple relevant entities (multi-hop). |
-| **4** | Fallback | `True` | **Dense RAG** | Standard factual lookup. |
+| Priority | Check Type | Condition (Pseudocode)                                                               | Route To      | Rationale                                                         |
+| :------- | :--------- | :----------------------------------------------------------------------------------- | :------------ | :---------------------------------------------------------------- | ---------------- | -------------------------- |
+| **1**    | Regex      | `matches(query, r\"(from                                                             | between       | in) \\d{4}\")`OR`contains(query, \"timeline\", \"history of\")`   | **Temporal RAG** | Explicit date constraints. |
+| **2**    | Regex      | `contains(query, \"connection between\", \"relationship\", \"how does X affect Y\")` | **Graph RAG** | Multi-hop reasoning intent.                                       |
+| **3**    | Signal     | `Probe.skewness < 0.5` AND `Probe.max_score > 0.65`                                  | **Graph RAG** | Flat distribution implies multiple relevant entities (multi-hop). |
+| **4**    | Fallback   | `True`                                                                               | **Dense RAG** | Standard factual lookup.                                          |
 
 _Note: Thresholds (0.5, 0.65, 0.4) are initial hyperparameters. These will be tuned on the Dev Set._
 
@@ -62,12 +62,12 @@ The Lightweight Classifier must process distinct **feature families**: **Q-Emb**
 
 **Probe:** Top-10 Dense retrieval signals. The Probe runs a standard Dense retrieval (top-k=10). We extract signals from the resulting `scores` list (cosine similarity):
 
-| Signal                | Definition / Formula                                                                                 | Library Implementation        |
-| :-------------------- | :--------------------------------------------------------------------------------------------------- | :---------------------------- |
-| **Max Score**         | $S_{max} = \max(scores)$                                                                             | `np.max(scores)`              |
-| **Min Score**         | $S_{min} = \min(scores)$                                                                             | `np.min(scores)`              |
-| **Mean Score**        | $\mu = \frac{1}{k}\sum scores$                                                                       | `np.mean(scores)`             |
-| **Skewness**          | Measure of asymmetry. High skew = sharp peak (good). Low skew = flat (ambiguous).                    | `scipy.stats.skew(scores)`    |
+| Signal                  | Definition / Formula                                                                                         | Library Implementation        |
+| :---------------------- | :----------------------------------------------------------------------------------------------------------- | :---------------------------- |
+| **Max Score**           | $S_{max} = \max(scores)$                                                                                     | `np.max(scores)`              |
+| **Min Score**           | $S_{min} = \min(scores)$                                                                                     | `np.min(scores)`              |
+| **Mean Score**          | $\mu = \frac{1}{k}\sum scores$                                                                               | `np.mean(scores)`             |
+| **Skewness**            | Measure of asymmetry. High skew = sharp peak (good). Low skew = flat (ambiguous).                            | `scipy.stats.skew(scores)`    |
 | **Semantic dispersion** | Average distance between the Query Embedding ($Q$) and the Centroid ($C$) of the retrieved chunk embeddings. | `1 - cosine_similarity(Q, C)` |
 
 ## 4. Strategy Implementation Specs
@@ -144,8 +144,11 @@ _This ensures our router is trained to be efficient, not just accuracy-obsessed.
 
 **Relation extractor (`RELATION_EXTRACTOR` env var):**
 
-| Value | Behaviour |
-|-------|-----------|
+| Value             | Behaviour                                                  |
+| ----------------- | ---------------------------------------------------------- |
 | `rebel` (default) | REBEL extraction during corpus build. Full graph produced. |
+
 | `llm` | Synchronous LLM extraction per chunk during build. No batch API. |
 | `llm-batch` | Build corpus without triple extraction (chunks + entities only). Batch job is auto-submitted when build finishes. Run `make collect-and-build-graph` when the batch completes to merge LLM triples and rebuild the graph. |
+
+**Alias vs raw triples (`ADD_BOTH_ALIAS_AND_RAW_TRIPLES` env var):** When `true`, relation extractors (LLM and REBEL) emit both the aliased triple and the raw-normalized triple (no alias lookup) when they differ. This adds extra graph edges so queries can match either form, useful when the alias map is imperfect. Default: `false`.

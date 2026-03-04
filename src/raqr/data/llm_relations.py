@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
-from raqr.data.enrich_entities import norm_entity
+from raqr.data.enrich_entities import add_both_alias_and_raw_triples, norm_entity, normalize_key
 from raqr.prompts import get_triple_extractor_prompt
 
 logger = logging.getLogger(__name__)
@@ -74,10 +74,17 @@ def _post_process_raw_triples(
     alias_map: Dict[str, str],
     chunk_id: Optional[str],
     debug: bool = False,
+    add_both_alias_and_raw: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
-    """Convert raw LLM tool-call triples into REBEL-compatible dicts."""
+    """Convert raw LLM tool-call triples into REBEL-compatible dicts.
+
+    When add_both_alias_and_raw is True (or ADD_BOTH_ALIAS_AND_RAW_TRIPLES env),
+    also emits a raw-normalized triple (no alias lookup) when it differs from
+    the aliased one, so the graph can match queries using either form.
+    """
     out: List[Dict[str, Any]] = []
-    seen: set = set()
+    seen: set[tuple[str, str, str]] = set()
+    use_both = add_both_alias_and_raw if add_both_alias_and_raw is not None else add_both_alias_and_raw_triples()
 
     for t in raw_triples:
         subj_surface = (t.get("subj_surface") or "").strip()
@@ -97,35 +104,47 @@ def _post_process_raw_triples(
 
         subj_norm = norm_entity(subj_surface, alias_map)
         obj_norm = norm_entity(obj_surface, alias_map)
+        subj_raw = normalize_key(subj_surface)
+        obj_raw = normalize_key(obj_surface)
 
         if not subj_norm or not obj_norm:
             if debug:
                 logger.debug("Skipping triple with empty norm: subj=%r obj=%r", subj_surface, obj_surface)
             continue
 
-        key = (subj_norm, pred, obj_norm)
-        if key in seen:
-            continue
-        seen.add(key)
-
         start_char, end_char = _find_evidence_span(evidence, text)
+        match_text = evidence or f"{subj_surface} {pred} {obj_surface}"
 
-        rec: Dict[str, Any] = {
-            "subj_surface": subj_surface,
-            "obj_surface": obj_surface,
-            "subj_norm": subj_norm,
-            "pred": pred,
-            "obj_norm": obj_norm,
-            "source": "llm",
-            "rule_id": RULE_ID,
-            "confidence": confidence,
-            "match_text": evidence or f"{subj_surface} {pred} {obj_surface}",
-            "start_char": start_char,
-            "end_char": end_char,
-        }
-        if chunk_id:
-            rec["chunk_id"] = chunk_id
-        out.append(rec)
+        def _make_rec(snorm: str, onorm: str) -> Dict[str, Any]:
+            rec: Dict[str, Any] = {
+                "subj_surface": subj_surface,
+                "obj_surface": obj_surface,
+                "subj_norm": snorm,
+                "pred": pred,
+                "obj_norm": onorm,
+                "source": "llm",
+                "rule_id": RULE_ID,
+                "confidence": confidence,
+                "match_text": match_text,
+                "start_char": start_char,
+                "end_char": end_char,
+            }
+            if chunk_id:
+                rec["chunk_id"] = chunk_id
+            return rec
+
+        # Always emit aliased triple (canonical)
+        key_aliased = (subj_norm, pred, obj_norm)
+        if key_aliased not in seen:
+            seen.add(key_aliased)
+            out.append(_make_rec(subj_norm, obj_norm))
+
+        # Optionally emit raw-normalized triple when it differs
+        if use_both and (subj_raw != subj_norm or obj_raw != obj_norm):
+            key_raw = (subj_raw, pred, obj_raw)
+            if key_raw not in seen:
+                seen.add(key_raw)
+                out.append(_make_rec(subj_raw, obj_raw))
 
     return out
 
@@ -203,6 +222,36 @@ class LLMTripleExtractor:
 # ---------------------------------------------------------------------------
 # Batch API helpers
 # ---------------------------------------------------------------------------
+
+
+def call_llm_for_triples(prompt: str) -> List[Dict[str, Any]]:
+    """Call LLM with prompt and return raw triples from extract_triples tool. Used for dev two-step runner."""
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    model_id = os.getenv("LLM_TRIPLE_MODEL", "gpt-4o-mini")
+    temperature = float(os.getenv("LLM_TRIPLE_TEMPERATURE", "0"))
+    max_tokens = int(os.getenv("LLM_TRIPLE_MAX_TOKENS", "2048"))
+
+    response = client.chat.completions.create(
+        model=model_id,
+        messages=[{"role": "user", "content": prompt}],
+        tools=[_EXTRACT_TRIPLES_TOOL],
+        tool_choice={"type": "function", "function": {"name": "extract_triples"}},
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+
+    raw_triples: List[Dict[str, Any]] = []
+    msg = response.choices[0].message if response.choices else None
+    if msg and msg.tool_calls:
+        for tc in msg.tool_calls:
+            if getattr(tc, "function", None) and getattr(tc.function, "name", None) == "extract_triples":
+                args_str = getattr(tc.function, "arguments", None) or "{}"
+                try:
+                    args = json.loads(args_str)
+                    raw_triples.extend(args.get("triples", []))
+                except json.JSONDecodeError as e:
+                    logger.warning("Failed to parse extract_triples args: %s", e)
+    return raw_triples
 
 
 def build_chat_completion_request(

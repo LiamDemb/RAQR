@@ -38,6 +38,16 @@ def _env_bool(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def add_both_alias_and_raw_triples() -> bool:
+    """Whether to add both aliased and raw-normalized triples when they differ.
+
+    When enabled, relation extractors emit an extra triple using normalize_key()
+    (no alias lookup) in addition to the aliased triple. Helps when the alias
+    map is imperfect. Controlled by ADD_BOTH_ALIAS_AND_RAW_TRIPLES env var.
+    """
+    return _env_bool("ADD_BOTH_ALIAS_AND_RAW_TRIPLES", "0")
+
+
 def should_use_noun_chunks(use_noun_chunks: Optional[bool] = None) -> bool:
     if use_noun_chunks is not None:
         return bool(use_noun_chunks)

@@ -9,7 +9,7 @@ import logging
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from raqr.data.enrich_entities import normalize_key
+from raqr.data.enrich_entities import add_both_alias_and_raw_triples, normalize_key
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,7 @@ def parse_rebel_output(text: str) -> List[Tuple[str, str, str]]:
 def _normalize_triple(
     subj: str, pred: str, obj: str, alias_map: Optional[Dict[str, str]] = None
 ) -> Optional[RelationTriple]:
+    """Normalize a triple with alias lookup. Returns a single RelationTriple."""
     alias_map = alias_map or {}
     subj_norm = alias_map.get(normalize_key(subj), normalize_key(subj))
     obj_norm = alias_map.get(normalize_key(obj), normalize_key(obj))
@@ -130,6 +131,38 @@ def _normalize_triple(
         subj_norm=subj_norm,
         obj_norm=obj_norm,
     )
+
+
+def _triples_for_graph(
+    subj: str, pred: str, obj: str, alias_map: Dict[str, str]
+) -> List[RelationTriple]:
+    """Return 1 or 2 RelationTriples for graph build.
+
+    When ADD_BOTH_ALIAS_AND_RAW_TRIPLES is set and aliasing changed subj/obj,
+    returns both the aliased and raw-normalized triple.
+    """
+    triple = _normalize_triple(subj, pred, obj, alias_map)
+    if triple is None:
+        return []
+
+    result: List[RelationTriple] = [triple]
+    if not add_both_alias_and_raw_triples():
+        return result
+
+    subj_raw = normalize_key(subj)
+    obj_raw = normalize_key(obj)
+    if subj_raw == triple.subj_norm and obj_raw == triple.obj_norm:
+        return result
+
+    raw_triple = RelationTriple(
+        subj=triple.subj,
+        pred=triple.pred,
+        obj=triple.obj,
+        subj_norm=subj_raw,
+        obj_norm=obj_raw,
+    )
+    result.append(raw_triple)
+    return result
 
 
 def extract_relations_rebel(
@@ -171,16 +204,13 @@ def extract_relations_rebel(
 
         decoded = tokenizer.batch_decode(gen, skip_special_tokens=False)
         for output in decoded:
-            triples = []
+            triples: List[RelationTriple] = []
             for subj, pred, obj in parse_rebel_output(output):
-                triple = _normalize_triple(subj, pred, obj, alias_map)
-                if triple is None:
-                    continue
-                triples.append(triple)
+                triples.extend(_triples_for_graph(subj, pred, obj, alias_map))
 
-            # Dedupe by normalized triple
-            seen = set()
-            unique = []
+            # Dedupe by normalized triple (subj_norm, pred, obj_norm)
+            seen: set[tuple[str, str, str]] = set()
+            unique: List[Dict[str, str]] = []
             for tr in triples:
                 key = (tr.subj_norm, tr.pred, tr.obj_norm)
                 if key in seen:
