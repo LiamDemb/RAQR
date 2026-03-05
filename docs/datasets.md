@@ -29,6 +29,13 @@ fields after downloading the final artifacts.
 - Redistribution notes: Check license terms before redistributing processed data.
 - Download script: `scripts/datasets/hotpotqa_download.py`
 
+## 2WikiMultiHopQA
+- Canonical source: https://huggingface.co/datasets/framolfese/2WikiMultihopQA
+- Original paper: Ho et al., Constructing A Multi-hop QA Dataset for Comprehensive Evaluation of Reasoning Steps, COLING 2020
+- License: Apache-2.0 (original repo)
+- Download script: `scripts/datasets/twowikimultihop_download.py`
+- Schema: HotPotQA-compatible (supporting_facts.title, supporting_facts.sent_id). Use `--hotpotqa` with the downloaded JSONL to run ingestion.
+
 ## WikiWhy
 - Canonical source: https://github.com/matt-seb-ho/WikiWhy
 - License: MIT (per repository)

@@ -146,7 +146,7 @@ def main() -> int:
             by_source[source]["graph_wins"] += 1
             winner = "Graph"
 
-        if score_dense != score_graph and args.print_disagreements:
+        if score_dense != score_graph or (score_dense == 0 and score_graph == 0) and args.print_disagreements:
             disagreements[(score_graph, score_dense)].append({
                 "idx": idx + 1,
                 "question": question,
@@ -201,11 +201,11 @@ def main() -> int:
         print(f"  {key:20s}  Dense {dw}/{t}   Graph {gw}/{t}")
     print()
 
-    # Disagreements (grouped by Graph score, Dense score)
+    # Disagreements (grouped by Graph score, Dense score), plus both-0
     if args.print_disagreements and disagreements:
         _trunc = lambda s, n=60: s[:n] + "..." if len(s) > n else s
-        group_order = [(0, 1), (0, 2), (1, 0), (1, 2), (2, 1), (2, 0)]
-        print("Disagreements (Graph ≠ Dense judge scores):")
+        group_order = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 2), (2, 1), (2, 0)]
+        print("Disagreements (Graph ≠ Dense judge scores) + both scored 0:")
         print("=" * 60)
         for g, d in group_order:
             items = disagreements.get((g, d), [])
