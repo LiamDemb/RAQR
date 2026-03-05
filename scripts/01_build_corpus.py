@@ -6,10 +6,12 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List
 
 import pandas as pd
+from openai import OpenAI
 
 from dotenv import load_dotenv
 from raqr.data.build_faiss import build_faiss_index
@@ -178,6 +180,56 @@ def _write_jsonl(path: Path, items: List[dict]) -> None:
             handle.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
+def _wait_for_openai_batch(
+    batch_id: str,
+    poll_seconds: int = 300,
+    timeout_seconds: int = 86400,
+    api_key: str | None = None,
+) -> tuple[bool, str]:
+    """Poll OpenAI Batch until completed, failed, cancelled, expired, or timeout.
+
+    Returns (success, status). success is True only when status=='completed'.
+    """
+    client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+    terminal_success = {"completed"}
+    terminal_failure = {"failed", "cancelled", "expired"}
+    start = time.monotonic()
+
+    while True:
+        batch = client.batches.retrieve(batch_id)
+        status = getattr(batch, "status", "unknown") or "unknown"
+
+        req = getattr(batch, "request_counts", None)
+        completed = getattr(req, "completed", 0) if req else 0
+        failed = getattr(req, "failed", 0) if req else 0
+        total = getattr(req, "total", 0) if req else 0
+        logger.info(
+            "Batch %s: status=%s completed=%d failed=%d total=%d",
+            batch_id,
+            status,
+            completed,
+            failed,
+            total,
+        )
+
+        if status in terminal_success:
+            return True, status
+        if status in terminal_failure:
+            logger.error("Batch %s terminated with status=%s", batch_id, status)
+            return False, status
+
+        elapsed = time.monotonic() - start
+        if elapsed >= timeout_seconds:
+            logger.error(
+                "Batch %s wait timed out after %.0f s. Run 'make collect-and-build-graph' when it completes.",
+                batch_id,
+                elapsed,
+            )
+            return False, "timeout"
+
+        time.sleep(poll_seconds)
+
+
 def main() -> int:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Build unified corpus + indexes.")
@@ -235,6 +287,18 @@ def main() -> int:
         "--chunk-overlap-tokens",
         type=int,
         default=int(os.getenv("CHUNK_OVERLAP_TOKENS", "100")),
+    )
+    parser.add_argument(
+        "--llm-batch-poll-seconds",
+        type=int,
+        default=int(os.getenv("LLM_BATCH_POLL_SECONDS", "300")),
+        help="Seconds between batch status polls (default 300).",
+    )
+    parser.add_argument(
+        "--llm-batch-wait-timeout-seconds",
+        type=int,
+        default=int(os.getenv("LLM_BATCH_WAIT_TIMEOUT_SECONDS", "86400")),
+        help="Max seconds to wait for batch completion (default 86400=24h).",
     )
     args = parser.parse_args()
 
@@ -429,19 +493,80 @@ def main() -> int:
     )
 
     if relation_extractor == "llm-batch":
-        submit_script = Path(__file__).resolve().parent / "corpus" / "submit_llm_triple_batch.py"
+        script_dir = Path(__file__).resolve().parent
+        project_root = script_dir.parent
+        submit_script = script_dir / "corpus" / "submit_llm_triple_batch.py"
+        collect_script = script_dir / "corpus" / "collect_llm_triple_batch.py"
+        graph_script = script_dir / "corpus" / "build_graph_from_corpus.py"
+
         if not submit_script.is_file():
             logger.error("Submit script not found: %s", submit_script)
             return 1
+        submit_cmd = [sys.executable, str(submit_script), "--corpus", str(corpus_path), "--output-dir", str(output_dir)]
+        limit = os.getenv("LLM_BATCH_LIMIT")
+        if limit:
+            submit_cmd.extend(["--limit", str(limit)])
         logger.info("Submitting LLM triple extraction batch job...")
-        result = subprocess.run(
-            [sys.executable, str(submit_script), "--corpus", str(corpus_path), "--output-dir", str(output_dir)],
-            cwd=str(Path(__file__).resolve().parent.parent),
-        )
+        result = subprocess.run(submit_cmd, cwd=str(project_root))
         if result.returncode != 0:
             logger.error("Batch submit failed with exit code %d", result.returncode)
             return result.returncode
-        logger.info("Batch job submitted. Run 'make collect-and-build-graph' when complete.")
+
+        state_path = output_dir / "batch_state.json"
+        if not state_path.is_file():
+            logger.error("batch_state.json not found after submit")
+            return 1
+        with state_path.open("r", encoding="utf-8") as f:
+            batch_state = json.load(f)
+        batch_id = batch_state.get("batch_id")
+        if not batch_id:
+            logger.error("batch_id missing in batch_state.json")
+            return 1
+
+        logger.info("Waiting for batch %s (poll every %ds, timeout %ds)...", batch_id, args.llm_batch_poll_seconds, args.llm_batch_wait_timeout_seconds)
+        ok, status = _wait_for_openai_batch(
+            batch_id,
+            poll_seconds=args.llm_batch_poll_seconds,
+            timeout_seconds=args.llm_batch_wait_timeout_seconds,
+        )
+        if not ok:
+            return 1
+
+        logger.info("Collecting batch results...")
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(collect_script),
+                "--state",
+                str(state_path),
+                "--corpus",
+                str(corpus_path),
+                "--output",
+                str(output_dir / "corpus_llm.jsonl"),
+                "--output-dir",
+                str(output_dir),
+            ],
+            cwd=str(project_root),
+        )
+        if result.returncode != 0:
+            logger.error("Collect failed with exit code %d", result.returncode)
+            return result.returncode
+
+        logger.info("Rebuilding graph from corpus_llm.jsonl...")
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(graph_script),
+                "--corpus",
+                str(output_dir / "corpus_llm.jsonl"),
+                "--graph-out",
+                str(output_dir / "graph.pkl"),
+            ],
+            cwd=str(project_root),
+        )
+        if result.returncode != 0:
+            logger.error("Build graph failed with exit code %d", result.returncode)
+            return result.returncode
 
     logger.info("Wrote corpus and artifacts to %s", output_dir)
     docstore.close()

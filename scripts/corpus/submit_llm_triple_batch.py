@@ -97,7 +97,8 @@ def main() -> int:
             chunk_id = chunk.get("chunk_id") or f"chunk_{count}"
             text_raw = chunk.get("text") or ""
             text_for_extraction = normalize_text_for_extraction(text_raw)
-            prompt = prompt_template.format(text=text_for_extraction)
+            title = chunk.get("title") or ""
+            prompt = prompt_template.format(title=title, text=text_for_extraction)
 
             body = build_chat_completion_request(prompt)
             batch_line = build_batch_line(custom_id=chunk_id, body=body)
