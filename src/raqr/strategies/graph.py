@@ -11,14 +11,16 @@ from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 import networkx as nx
 
 from raqr.entity_alias_resolver import EntityAliasResolver
+from raqr.entity_index_store import EntityIndexStore
 from raqr.generator import Generator
 from raqr.graph_store import NetworkXGraphStore
 from raqr.loaders import ChunkIdToText
+from raqr.query_entity_extractor import LLMQueryEntityExtractor
 from raqr.strategies.base import BaseStrategy, StrategyResult
 from raqr.data.enrich_entities import (
+    extract_entities_capitalization,
     extract_entities_spacy,
     load_spacy,
-    should_use_noun_chunks,
 )
 
 
@@ -30,31 +32,38 @@ class QueryEntityExtractor(Protocol):
         ...
 
 
+def _default_query_entity_extractor(alias_resolver: EntityAliasResolver) -> QueryEntityExtractor:
+    """Return LLM-based query entity extractor."""
+    return LLMQueryEntityExtractor(alias_resolver=alias_resolver)
+
+
 @dataclass
 class SpacyQueryEntityExtractor:
-    """Query entity extractor using the same normalization policy as corpus building."""
+    """Legacy query entity extractor: capitalization heuristic + spaCy NER. Use QUERY_ENTITY_EXTRACTOR=spacy."""
 
     alias_resolver: EntityAliasResolver
     spacy_model: str = os.getenv("SPACY_MODEL", "en_core_web_sm")
-    use_noun_chunks: Optional[bool] = None
     _nlp: Optional[object] = None
 
     def _ensure_loaded(self) -> None:
         if self._nlp is None:
             self._nlp = load_spacy(
                 self.spacy_model,
-                use_noun_chunks=should_use_noun_chunks(self.use_noun_chunks),
+                use_noun_chunks=False,
             )
 
     def extract(self, query: str) -> List[str]:
         self._ensure_loaded()
-        entities = extract_entities_spacy(
+        alias_map = self.alias_resolver.alias_map
+        cap_norms = set(extract_entities_capitalization(query, alias_map))
+        spacy_ents = extract_entities_spacy(
             text=query,
             nlp=self._nlp,
-            alias_map=self.alias_resolver.alias_map,
-            use_noun_chunks=should_use_noun_chunks(self.use_noun_chunks),
+            alias_map=alias_map,
+            use_noun_chunks=False,
         )
-        return sorted({ent["norm"] for ent in entities if ent.get("norm")})
+        spacy_norms = {e["norm"] for e in spacy_ents if e.get("norm")}
+        return sorted(cap_norms | spacy_norms)
 
 
 @dataclass
@@ -67,6 +76,9 @@ class GraphStrategy(BaseStrategy):
     top_k: int = int(os.getenv("GRAPH_TOP_K", "10"))
     max_hops: int = int(os.getenv("GRAPH_MAX_HOPS", "1"))
     entity_df_by_norm: Optional[Dict[str, int]] = None
+    entity_index_store: Optional[EntityIndexStore] = None
+    entity_vector_top_k: int = int(os.getenv("GRAPH_ENTITY_VECTOR_TOP_K", "3"))
+    entity_vector_threshold: float = float(os.getenv("GRAPH_ENTITY_VECTOR_THRESHOLD", "0.5"))
     start_entity_weight: float = float(os.getenv("GRAPH_START_ENTITY_WEIGHT", "2.0"))
     expanded_entity_weight: float = float(os.getenv("GRAPH_EXPANDED_ENTITY_WEIGHT", "1.0"))
     synergy_gamma: float = float(os.getenv("GRAPH_SYNERGY_GAMMA", "0.5"))
@@ -226,6 +238,17 @@ class GraphStrategy(BaseStrategy):
             extracted_norms = self.entity_extractor.extract(query)
             candidate_nodes = {f"E:{norm}" for norm in extracted_norms}
             start_nodes = {node for node in candidate_nodes if self._graph.has_node(node)}
+            unmatched_norms = [norm for norm in extracted_norms if f"E:{norm}" not in start_nodes]
+            if unmatched_norms and self.entity_index_store:
+                for norm in unmatched_norms:
+                    for match_norm, score in self.entity_index_store.search(
+                        norm,
+                        top_k=self.entity_vector_top_k,
+                        threshold=self.entity_vector_threshold,
+                    ):
+                        node = f"E:{match_norm}"
+                        if self._graph.has_node(node):
+                            start_nodes.add(node)
             unmatched_entities = sorted(
                 norm for norm in extracted_norms if f"E:{norm}" not in start_nodes
             )

@@ -39,7 +39,9 @@
 3. `data/processed/vector_index.faiss` + `data/processed/vector_meta.parquet` — embeddings + metadata mapping (FAISS has no native metadata filtering, so store metadata externally).  
 4. `data/processed/graph.pkl` — NetworkX graph (Entity-Relation-Entity edges + Entity-Chunk provenance edges).  
 5. `data/processed/entity_lexicon.parquet` — canonical entity strings, aliases, and optional QIDs (used for normalization).
-6. `data/processed/alias_map.json` — deterministic redirect-mined alias artifact (`Dict[str, str]`, normalized alias -> normalized canonical) produced at corpus-build time and loaded by Phase 2 graph retrieval for consistent entity normalization.
+6. `data/processed/entity_index.faiss` + `entity_index_meta.parquet` — FAISS index over entity norms for vector similarity matching at query time.
+7. `data/processed/wiki_titles.jsonl` — Wikipedia page titles fetched for the corpus (used for LLM seed anchoring).
+8. `data/processed/alias_map.json` — deterministic redirect-mined alias artifact (`Dict[str, str]`, normalized alias -> normalized canonical) produced at corpus-build time; used for FlashText expansion and query normalization.
 
 These artifacts align with the modular “offline prep vs online routing & inference” separation. 
 
@@ -125,14 +127,13 @@ Convert each acquired doc into:
 Run **the same enrichment** on all docs:
 
 * Regex date extraction → `years` metadata
-* Entity extraction + normalization policy → `entities` metadata
-* Relation extraction (semantic triples) → `relations` metadata (and graph edges)
+* Entity + relation extraction (LLM IE batch) → `entities` + `relations` metadata (and graph edges)
 
 ### Stage E — Chunking & Serialization
 
-Chunk to 500–800 BPE tokens (REBEL tokenizer) with overlap; write `corpus.jsonl`. Chunks are guaranteed to stay under REBEL's 1024-token limit. Relation extraction uses `RE_MAX_INPUT_TOKENS` (1024); tokenizer truncation remains as a safety net.
+Chunk to 500–800 tokens (tiktoken) with overlap; write `corpus.jsonl`. LLM IE extraction runs per chunk via the Batch API.
 
-**Token limits:** Chunking uses the REBEL BPE tokenizer. Default 500–800 tokens per chunk (configurable via `CHUNK_MIN_TOKENS`, `CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`). REBEL accepts up to 1024 BPE tokens; the embedder (all-MiniLM-L6-v2) truncates at 256 tokens internally.
+**Token limits:** Chunking uses configurable `CHUNK_MIN_TOKENS`, `CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`. The embedder (all-MiniLM-L6-v2) truncates at 256 tokens internally.
 
 ### Stage F — Indexing
 
@@ -405,28 +406,14 @@ def extract_years(text, max_range_expand=15):
 
 **Goal:** GraphRAG success depends on matching query entities to corpus entities. Surface-form mismatch (“U.S.” vs “United States”) can collapse GraphRAG’s recall; we must normalize entities consistently across all sources. 
 
-#### 5.2.1 Extraction (Entities)
+#### 5.2.1 LLM Information Extraction (Pipeline Default)
 
-* Run spaCy NER over **chunk text** (and later over queries at retrieval time).
-* Keep entity types: `PERSON`, `ORG`, `GPE`, `LOC`, `WORK_OF_ART`, `EVENT` (configurable).
-* For high-recall GraphRAG, optionally augment with noun chunks (`doc.noun_chunks`) using deterministic filters:
-  * `NOUN_CHUNK_MAX_TOKENS` (default 5),
-  * `NOUN_CHUNK_STOPWORD_RATIO_MAX` (default 0.6),
-  * edge trimming for stopwords/determiners before normalization.
-* Apply the same extraction policy at query-time to reduce ingestion/query mismatch.
+* A single LLM call per chunk extracts **both** entities and triples via the Batch API.
+* Wikipedia titles for fetched pages are pre-scanned with FlashText to pass a per-chunk **seed list** into the prompt; the LLM anchors to these when possible but may add new entities.
+* Output: `metadata.entities` and `metadata.relations` with consistent join keys.
+* Implemented by `scripts/corpus/run_llm_ie_batch.py` (submit → wait → collect → replace corpus).
 
-#### 5.2.2 Relation Extraction (Semantic Triples)
-
-**Goal:** Replace shallow “co-mentions” with explicit directed relations to support multi-hop reasoning.
-
-* Run a lightweight Relation Extraction (RE) model over each chunk to extract triples \((subject, predicate, object)\).
-* Normalize `subject` and `object` using the same entity normalization policy (below).
-* Store triples in chunk metadata as `relations` (for auditability) and use them to build directed semantic edges in the graph.
-* Example models:
-  * `Babelscape/rebel-large` (transformers-based RE)
-  * GLiNER relation models (spaCy pipeline integration, if preferred)
-
-#### 5.2.3 Normalization (deterministic)
+#### 5.2.2 Normalization (deterministic)
 
 Apply the same function everywhere:
 
@@ -443,7 +430,7 @@ Apply the same function everywhere:
 
 * If a chunk originates from a resolved Wikipedia page with a known QID, tag that page-title entity with `qid` and propagate.
 
-#### 5.2.4 Entity Lexicon Build
+#### 5.2.3 Entity Lexicon Build
 
 Create `entity_lexicon.parquet`:
 
@@ -452,7 +439,7 @@ Create `entity_lexicon.parquet`:
 * `qid_candidates` (if any)
 * `df` document frequency (for downweighting extremely common entities)
 
-#### 5.2.5 Entity Policy Pseudocode
+#### 5.2.4 Entity Policy Pseudocode
 
 ```python
 def norm_entity(s, alias_map):
@@ -477,18 +464,18 @@ def extract_entities_spacy(text, nlp, alias_map):
 ```
 
 
-## 6) Chunking Strategy (500–800 BPE tokens + overlap)
+## 6) Chunking Strategy (500–800 tokens + overlap)
 
 ### 6.1 Requirements
 
-* Chunk size: **500–800 BPE tokens** (REBEL tokenizer; max 800 keeps chunks under REBEL's 1024 limit)
+* Chunk size: **500–800 tokens** (tiktoken cl100k_base; aligns with OpenAI models)
 * Overlap: **~10–15%** (e.g., 100 tokens)
 * Preserve section boundaries where possible (don’t merge unrelated sections)
 
 ### 6.2 Algorithm
 
 1. Split doc into blocks (paragraph/list/table) with section paths.
-2. For each block, count BPE tokens via REBEL tokenizer.
+2. For each block, count tokens via tiktoken (cl100k_base).
 3. Accumulate blocks until token budget reached.
 4. When exceeding:
    * finalize chunk
@@ -497,7 +484,7 @@ def extract_entities_spacy(text, nlp, alias_map):
 
 ### 6.3 Implementation
 
-Implemented in `src/raqr/data/chunking.py`. Uses `chunk_blocks(blocks, tokenizer, min_tokens=500, max_tokens=800, overlap_tokens=100)`. The tokenizer is REBEL's (`Babelscape/rebel-large`); chunk limits are configurable via `--chunk-min-tokens`, `--chunk-max-tokens`, `--chunk-overlap-tokens` or env vars.
+Implemented in `src/raqr/data/chunking.py`. Uses `chunk_blocks(blocks, min_tokens=500, max_tokens=800, overlap_tokens=100)` with tiktoken cl100k_base. Chunk limits are configurable via `--chunk-min-tokens`, `--chunk-max-tokens`, `--chunk-overlap-tokens` or env vars.
 
 
 ## 7) Indexing Artifacts

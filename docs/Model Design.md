@@ -34,7 +34,7 @@ The Lightweight Classifier must process distinct **feature families**: **Q-Emb**
     *   Backbone: `DistilBERT-base-uncased` (frozen or fine-tuned).
     *   Output: `[CLS]` token embedding (Dimension: 768).
 2.  **Q-Feat + Probe Branch (Signals):**
-    *   Q-Feat: length/token count, entity density (via spaCy), complexity keywords; optional syntax depth.
+    *   Q-Feat: length/token count, entity density (from query entity extraction), complexity keywords; optional syntax depth.
     *   Probe: max score, skewness, semantic dispersion (alias: semantic distance).
     *   Input: Vector of floats (dimension depends on active channels).
     *   Layer: Batch Normalization (Crucial: scales inputs to 0-1 range).
@@ -50,7 +50,7 @@ The Lightweight Classifier must process distinct **feature families**: **Q-Emb**
 ## 3. Feature Families (Q-Emb / Q-Feat / Probe)
 **Q-Emb:** DistilBERT [CLS] embedding (768 dims).
 
-**Q-Feat:** Engineered query features—length/token count, entity density (spaCy NER), complexity keywords; optional syntax depth.
+**Q-Feat:** Engineered query features—length/token count, entity density (from query entity extraction), complexity keywords; optional syntax depth.
 
 **Probe:** Top-10 Dense retrieval signals. The Probe runs a standard Dense retrieval (top-k=10). We extract signals from the resulting `scores` list (cosine similarity):
 
@@ -74,7 +74,7 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
         *   **Edges (provenance):** `Entity --> Chunk` (`appears_in`) to provide evidence text for relations.
         *   **Retrieval:** extract entities from query → map to graph entity nodes → traverse 1-hop relational edges → resolve to chunks via provenance edges.
     *   **Relation Extraction Policy:**
-        *   Run a lightweight RE model (e.g., `REBEL` or a GLiNER-relation model) over chunk text to extract `(subject, predicate, object)` triples.
+        *   LLM extraction over chunk text to extract entities and `(subject, predicate, object)` triples.
     *   **Entity Normalization Policy (to reduce surface-form mismatch):**
         *   Lowercase
         *   Strip punctuation / normalize whitespace
@@ -83,7 +83,7 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
     *   **Diagnostic to log:** entity match rate on the benchmark:
         *   “% of queries with \(\ge 1\) entity match in the graph” (after normalization).
         *   This helps distinguish “GraphRAG failed due to aliasing/matching” from “Graph reasoning not needed”.
-    1.  **Ingestion:** Extract entities + semantic triples \((subject, predicate, object)\) from chunk text using a lightweight Relation Extraction model (e.g., `REBEL` or a GLiNER-relation model).
+    1.  **Ingestion:** Extract entities + semantic triples \((subject, predicate, object)\) from chunk text using LLM extraction via the Batch API.
     2.  **Storage:** Store a NetworkX **DiGraph** with directed `Entity --predicate--> Entity` semantic edges and `Entity --> Chunk` provenance edges.
     3.  **Retrieval:** Extract entities from query $\rightarrow$ map to entity nodes $\rightarrow$ traverse outgoing relational edges (1-hop) $\rightarrow$ collect evidence chunks via provenance edges.
 

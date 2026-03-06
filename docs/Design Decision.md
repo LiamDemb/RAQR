@@ -41,7 +41,7 @@ The Lightweight Classifier must process distinct **feature families**: **Q-Emb**
     - Backbone: `DistilBERT-base-uncased` (frozen or fine-tuned).
     - Output: `[CLS]` token embedding (Dimension: 768).
 2.  **Q-Feat + Probe Branch (Signals):**
-    - Q-Feat: length/token count, entity density (via spaCy), complexity keywords; optional syntax depth.
+    - Q-Feat: length/token count, entity density (from query entity extraction), complexity keywords; optional syntax depth.
     - Probe: max score, skewness, semantic dispersion (alias: semantic distance).
     - Input: Vector of floats (dimension depends on active channels).
     - Layer: Batch Normalization (Crucial: scales inputs to 0-1 range).
@@ -78,13 +78,13 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
 
 - **Representation:** Relation-aware GraphRAG (Triple Graph) using NetworkX (no Neo4j).
 - **Implementation:**
-    1.  **Ingestion:** Run a lightweight Relation Extraction model (e.g., `Babelscape/rebel-large` or a GLiNER-relation model) over each chunk to extract semantic triples `(subject, predicate, object)`.
+    1.  **Ingestion:** LLM extraction over each chunk to extract entities and semantic triples `(subject, predicate, object)` via the Batch API.
     2.  **Storage:** Store a NetworkX **DiGraph**:
         - **Nodes:** Canonical Entities (normalized strings) and Chunks.
         - **Edges:**
             - **Semantic Edge:** `Entity --predicate--> Entity` (directed relation from extracted triples).
             - **Provenance Edge:** `Entity --> Chunk` (`appears_in`) to link evidence back to text.
-    3.  **Retrieval:** Extract entities from query $\rightarrow$ map to graph entity nodes $\rightarrow$ traverse outgoing **relational** edges (1-hop) $\rightarrow$ collect chunks linked via provenance edges from the expanded entity set.
+    3.  **Retrieval:** Extract entities from query (LLM default) $\rightarrow$ map to graph entity nodes (exact match + optional vector similarity) $\rightarrow$ traverse outgoing **relational** edges (1-hop) $\rightarrow$ collect chunks linked via provenance edges from the expanded entity set.
 
 ### B. TemporalRAG (Metadata Filter, No Temporal KG)
 
@@ -136,19 +136,8 @@ _This ensures our router is trained to be efficient, not just accuracy-obsessed.
 
 ## 6. Token Limits and Truncation
 
-**REBEL (relation extraction):** Uses BPE token limit (1024, from `max_position_embeddings`). Input is truncated by the tokenizer to `RE_MAX_INPUT_TOKENS` (default 1024). No character-based truncation.
+**Chunking:** Uses tiktoken (cl100k_base). Default 500–800 tokens per chunk; configurable via `CHUNK_MIN_TOKENS`, `CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`.
 
 **Embedder (all-MiniLM-L6-v2):** Truncates at 256 tokens internally. No configuration needed.
 
-**Chunking:** Uses REBEL BPE tokenizer. Default 500–800 tokens per chunk. Chunks are guaranteed under 1024; configurable via `CHUNK_MIN_TOKENS`, `CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`.
-
-**Relation extractor (`RELATION_EXTRACTOR` env var):**
-
-| Value             | Behaviour                                                  |
-| ----------------- | ---------------------------------------------------------- |
-| `rebel` (default) | REBEL extraction during corpus build. Full graph produced. |
-
-| `llm` | Synchronous LLM extraction per chunk during build. No batch API. |
-| `llm-batch` | Build corpus without triple extraction (chunks + entities only). Batch job is auto-submitted when build finishes. Run `make collect-and-build-graph` when the batch completes to merge LLM triples and rebuild the graph. |
-
-**Alias vs raw triples (`ADD_BOTH_ALIAS_AND_RAW_TRIPLES` env var):** When `true`, relation extractors (LLM and REBEL) emit both the aliased triple and the raw-normalized triple (no alias lookup) when they differ. This adds extra graph edges so queries can match either form, useful when the alias map is imperfect. Default: `false`.
+**LLM IE extraction:** Uses OpenAI Batch API. One LLM call per chunk extracts both entities and triples. Model and max tokens via `LLM_ONEPASS_MODEL`, `LLM_ONEPASS_MAX_TOKENS`.

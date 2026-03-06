@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 from raqr.entity_alias_resolver import EntityAliasResolver
 from raqr.graph_store import NetworkXGraphStore
-from raqr.strategies.graph import SpacyQueryEntityExtractor
+from raqr.strategies.graph import _default_query_entity_extractor
 
 
 def main() -> int:
@@ -32,7 +32,7 @@ def main() -> int:
 
     graph = NetworkXGraphStore(graph_path=f"{output_dir}/graph.pkl").load()
     alias_resolver = EntityAliasResolver.from_artifacts(output_dir=output_dir)
-    extractor = SpacyQueryEntityExtractor(alias_resolver=alias_resolver)
+    extractor = _default_query_entity_extractor(alias_resolver)
 
     entity_norms = extractor.extract(args.query)
     if not entity_norms:

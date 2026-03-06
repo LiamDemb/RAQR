@@ -6,14 +6,13 @@ import logging
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Dict, List
 
 import pandas as pd
-from openai import OpenAI
 
 from dotenv import load_dotenv
+from raqr.data.build_entity_index import build_entity_index
 from raqr.data.build_faiss import build_faiss_index
 from raqr.data.build_graph import build_graph
 from raqr.data.alias_map import CURATED_ALIASES, build_alias_map_from_redirects, normalize_alias_map
@@ -28,13 +27,7 @@ from raqr.data.corpus_acquisition import (
 )
 from raqr.data.corpus_schemas import CorpusChunk
 from raqr.data.docstore import DocStore
-from raqr.data.enrich_entities import (
-    extract_entities_spacy,
-    load_spacy,
-    should_use_noun_chunks,
-)
-from raqr.data.enrich_relations import extract_relations_rebel, load_rebel
-from raqr.data.llm_relations import LLMTripleExtractor
+from raqr.data.wiki_title_matcher import build_wiki_title_matcher, write_wiki_titles
 from raqr.data.enrich_years import aggregate_year_fields, extract_years
 from raqr.data.entity_lexicon import build_entity_lexicon
 from raqr.data.quality_gates import run_quality_gates
@@ -180,56 +173,6 @@ def _write_jsonl(path: Path, items: List[dict]) -> None:
             handle.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
-def _wait_for_openai_batch(
-    batch_id: str,
-    poll_seconds: int = 300,
-    timeout_seconds: int = 86400,
-    api_key: str | None = None,
-) -> tuple[bool, str]:
-    """Poll OpenAI Batch until completed, failed, cancelled, expired, or timeout.
-
-    Returns (success, status). success is True only when status=='completed'.
-    """
-    client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
-    terminal_success = {"completed"}
-    terminal_failure = {"failed", "cancelled", "expired"}
-    start = time.monotonic()
-
-    while True:
-        batch = client.batches.retrieve(batch_id)
-        status = getattr(batch, "status", "unknown") or "unknown"
-
-        req = getattr(batch, "request_counts", None)
-        completed = getattr(req, "completed", 0) if req else 0
-        failed = getattr(req, "failed", 0) if req else 0
-        total = getattr(req, "total", 0) if req else 0
-        logger.info(
-            "Batch %s: status=%s completed=%d failed=%d total=%d",
-            batch_id,
-            status,
-            completed,
-            failed,
-            total,
-        )
-
-        if status in terminal_success:
-            return True, status
-        if status in terminal_failure:
-            logger.error("Batch %s terminated with status=%s", batch_id, status)
-            return False, status
-
-        elapsed = time.monotonic() - start
-        if elapsed >= timeout_seconds:
-            logger.error(
-                "Batch %s wait timed out after %.0f s. Run 'make collect-and-build-graph' when it completes.",
-                batch_id,
-                elapsed,
-            )
-            return False, "timeout"
-
-        time.sleep(poll_seconds)
-
-
 def main() -> int:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Build unified corpus + indexes.")
@@ -244,25 +187,6 @@ def main() -> int:
         default=os.getenv("DOCSTORE_PATH", "data/processed/docstore.sqlite"),
     )
     parser.add_argument("--model-name", default=os.getenv("MODEL_NAME", "all-MiniLM-L6-v2"))
-    parser.add_argument(
-        "--re-model-name",
-        default=os.getenv("RE_MODEL_NAME", "Babelscape/rebel-large"),
-    )
-    parser.add_argument(
-        "--re-batch-size",
-        type=int,
-        default=int(os.getenv("RE_BATCH_SIZE", "4")),
-    )
-    parser.add_argument(
-        "--re-max-input-tokens",
-        type=int,
-        default=int(os.getenv("RE_MAX_INPUT_TOKENS", "1024")),
-    )
-    parser.add_argument(
-        "--re-max-new-tokens",
-        type=int,
-        default=int(os.getenv("RE_MAX_NEW_TOKENS", "128")),
-    )
     parser.add_argument("--max-pages", type=int, default=int(os.getenv("MAX_PAGES", "12")))
     parser.add_argument("--max-hops", type=int, default=int(os.getenv("MAX_HOPS", "2")))
     parser.add_argument(
@@ -287,18 +211,6 @@ def main() -> int:
         "--chunk-overlap-tokens",
         type=int,
         default=int(os.getenv("CHUNK_OVERLAP_TOKENS", "100")),
-    )
-    parser.add_argument(
-        "--llm-batch-poll-seconds",
-        type=int,
-        default=int(os.getenv("LLM_BATCH_POLL_SECONDS", "300")),
-        help="Seconds between batch status polls (default 300).",
-    )
-    parser.add_argument(
-        "--llm-batch-wait-timeout-seconds",
-        type=int,
-        default=int(os.getenv("LLM_BATCH_WAIT_TIMEOUT_SECONDS", "86400")),
-        help="Max seconds to wait for batch completion (default 86400=24h).",
     )
     args = parser.parse_args()
 
@@ -360,8 +272,6 @@ def main() -> int:
         for doc in docs:
             all_docs[doc.doc_key] = doc
 
-    noun_chunks_enabled = should_use_noun_chunks()
-    nlp = load_spacy(use_noun_chunks=noun_chunks_enabled)
     alias_map_redirects = build_alias_map_from_redirects(
         titles=[doc.title for doc in all_docs.values() if doc.title],
         wiki=wiki,
@@ -373,7 +283,17 @@ def main() -> int:
     with alias_map_path.open("w", encoding="utf-8") as handle:
         json.dump(alias_map_redirects, handle, ensure_ascii=False, sort_keys=True)
 
-    rebel_tokenizer, rebel_model, rebel_device = load_rebel(args.re_model_name)
+    wiki_titles = sorted({doc.title for doc in all_docs.values() if doc.title})
+    wiki_titles_path = output_dir / "wiki_titles.jsonl"
+    write_wiki_titles(wiki_titles, wiki_titles_path, format="jsonl")
+    logger.info("Wrote wiki_titles.jsonl (%d titles)", len(wiki_titles))
+
+    matcher = None
+    try:
+        matcher = build_wiki_title_matcher(wiki_titles, alias_map=alias_map_redirects)
+    except ImportError:
+        logger.warning("FlashText not installed; seed titles will be empty for IE extraction.")
+
     chunks: List[dict] = []
     chunk_texts: List[str] = []
 
@@ -394,7 +314,6 @@ def main() -> int:
         for idx, piece in enumerate(
             chunk_blocks(
                 structured.blocks,
-                tokenizer=rebel_tokenizer,
                 min_tokens=args.chunk_min_tokens,
                 max_tokens=args.chunk_max_tokens,
                 overlap_tokens=args.chunk_overlap_tokens,
@@ -403,12 +322,8 @@ def main() -> int:
             years = extract_years(piece.text)
             year_fields = aggregate_year_fields(years, piece.text, piece.token_count)
             text_for_extraction = normalize_text_for_extraction(piece.text)
-            entities = extract_entities_spacy(
-                text_for_extraction,
-                nlp,
-                alias_map,
-                use_noun_chunks=noun_chunks_enabled,
-            )
+            entities: List[dict] = []
+            relations: List[dict] = []
             metadata = {
                 "dataset_origin": structured.dataset_origin,
                 "page_id": structured.page_id,
@@ -435,40 +350,27 @@ def main() -> int:
             chunks.append(chunk_json)
             chunk_texts.append(text_for_extraction)
 
-    relation_extractor = (os.getenv("RELATION_EXTRACTOR", "rebel") or "rebel").strip().lower()
-    if relation_extractor == "llm":
-        logger.info("Relation extraction: using LLMTripleExtractor (sync, no batch)")
-        llm_ext = LLMTripleExtractor()
-        relations_by_chunk = []
-        for idx, text in enumerate(chunk_texts):
-            chunk_id = chunks[idx].get("chunk_id") if idx < len(chunks) else None
-            try:
-                rels = llm_ext.extract(text, chunk_id=chunk_id, alias_map=alias_map)
-            except Exception as e:
-                logger.warning("LLM triple extraction failed for chunk %s: %s", idx, e)
-                rels = []
-            relations_by_chunk.append(rels)
-    elif relation_extractor == "llm-batch":
-        logger.info("Relation extraction: llm-batch mode - skipping extraction, corpus will be enriched via batch API later")
-        relations_by_chunk = [[] for _ in chunk_texts]
-    else:
-        if relation_extractor != "rebel":
-            logger.info("RELATION_EXTRACTOR=%r unknown, defaulting to rebel", relation_extractor)
-        relations_by_chunk = extract_relations_rebel(
-            chunk_texts,
-            rebel_tokenizer,
-            rebel_model,
-            rebel_device,
-            alias_map=alias_map,
-            batch_size=args.re_batch_size,
-            max_input_tokens=args.re_max_input_tokens,
-            max_new_tokens=args.re_max_new_tokens,
-        )
-    for idx, rels in enumerate(relations_by_chunk):
-        chunks[idx].setdefault("metadata", {})["relations"] = rels
+    for idx in range(len(chunks)):
+        chunks[idx].setdefault("metadata", {})["relations"] = []
 
     corpus_path = output_dir / "corpus.jsonl"
     _write_jsonl(corpus_path, chunks)
+
+    script_dir = Path(__file__).resolve().parent
+    ie_script = script_dir / "corpus" / "run_llm_ie_batch.py"
+    if ie_script.is_file():
+        logger.info("Running LLM information extraction batch (submit -> wait -> collect -> replace corpus)...")
+        result = subprocess.run(
+            [sys.executable, str(ie_script), "--corpus", str(corpus_path), "--output-dir", str(output_dir)],
+            cwd=str(script_dir.parent),
+        )
+        if result.returncode != 0:
+            logger.error("IE batch pipeline failed with exit code %d", result.returncode)
+            return result.returncode
+        chunks = list(_iter_jsonl(str(corpus_path)))
+    else:
+        logger.error("IE batch script not found: %s", ie_script)
+        return 1
 
     build_faiss_index(
         chunks,
@@ -477,96 +379,27 @@ def main() -> int:
         model_name=args.model_name,
     )
 
-    if relation_extractor != "llm-batch":
-        graph = build_graph(chunks)
-        graph_path = output_dir / "graph.pkl"
-        pd.to_pickle(graph, graph_path)
+    graph = build_graph(chunks)
+    graph_path = output_dir / "graph.pkl"
+    pd.to_pickle(graph, graph_path)
 
     lexicon = build_entity_lexicon(chunks)
     lexicon_path = output_dir / "entity_lexicon.parquet"
     lexicon.to_parquet(lexicon_path, index=False)
+
+    build_entity_index(
+        lexicon_path=str(lexicon_path),
+        output_index_path=str(output_dir / "entity_index.faiss"),
+        output_meta_path=str(output_dir / "entity_index_meta.parquet"),
+        model_name=args.model_name,
+    )
+    logger.info("Built entity_index.faiss for vector similarity matching")
 
     run_quality_gates(
         samples,
         chunks,
         output_path=(output_dir / "quality_report.json").as_posix(),
     )
-
-    if relation_extractor == "llm-batch":
-        script_dir = Path(__file__).resolve().parent
-        project_root = script_dir.parent
-        submit_script = script_dir / "corpus" / "submit_llm_triple_batch.py"
-        collect_script = script_dir / "corpus" / "collect_llm_triple_batch.py"
-        graph_script = script_dir / "corpus" / "build_graph_from_corpus.py"
-
-        if not submit_script.is_file():
-            logger.error("Submit script not found: %s", submit_script)
-            return 1
-        submit_cmd = [sys.executable, str(submit_script), "--corpus", str(corpus_path), "--output-dir", str(output_dir)]
-        limit = os.getenv("LLM_BATCH_LIMIT")
-        if limit:
-            submit_cmd.extend(["--limit", str(limit)])
-        logger.info("Submitting LLM triple extraction batch job...")
-        result = subprocess.run(submit_cmd, cwd=str(project_root))
-        if result.returncode != 0:
-            logger.error("Batch submit failed with exit code %d", result.returncode)
-            return result.returncode
-
-        state_path = output_dir / "batch_state.json"
-        if not state_path.is_file():
-            logger.error("batch_state.json not found after submit")
-            return 1
-        with state_path.open("r", encoding="utf-8") as f:
-            batch_state = json.load(f)
-        batch_id = batch_state.get("batch_id")
-        if not batch_id:
-            logger.error("batch_id missing in batch_state.json")
-            return 1
-
-        logger.info("Waiting for batch %s (poll every %ds, timeout %ds)...", batch_id, args.llm_batch_poll_seconds, args.llm_batch_wait_timeout_seconds)
-        ok, status = _wait_for_openai_batch(
-            batch_id,
-            poll_seconds=args.llm_batch_poll_seconds,
-            timeout_seconds=args.llm_batch_wait_timeout_seconds,
-        )
-        if not ok:
-            return 1
-
-        logger.info("Collecting batch results...")
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(collect_script),
-                "--state",
-                str(state_path),
-                "--corpus",
-                str(corpus_path),
-                "--output",
-                str(output_dir / "corpus_llm.jsonl"),
-                "--output-dir",
-                str(output_dir),
-            ],
-            cwd=str(project_root),
-        )
-        if result.returncode != 0:
-            logger.error("Collect failed with exit code %d", result.returncode)
-            return result.returncode
-
-        logger.info("Rebuilding graph from corpus_llm.jsonl...")
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(graph_script),
-                "--corpus",
-                str(output_dir / "corpus_llm.jsonl"),
-                "--graph-out",
-                str(output_dir / "graph.pkl"),
-            ],
-            cwd=str(project_root),
-        )
-        if result.returncode != 0:
-            logger.error("Build graph failed with exit code %d", result.returncode)
-            return result.returncode
 
     logger.info("Wrote corpus and artifacts to %s", output_dir)
     docstore.close()

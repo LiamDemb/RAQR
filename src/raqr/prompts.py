@@ -4,7 +4,7 @@ All strategies, evaluation scripts, and integration checks use these prompts
 for consistency. To customize for testing:
 
 - Edit the constants below, or
-- Set GENERATOR_BASE_PROMPT_FILE / LLM_JUDGE_PROMPT_FILE / LLM_TRIPLE_PROMPT_FILE
+- Set GENERATOR_BASE_PROMPT_FILE / LLM_JUDGE_PROMPT_FILE
   to a .txt file path to load an alternate prompt from disk.
 """
 
@@ -105,31 +105,82 @@ def get_judge_prompt() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Triple extractor prompt (used by LLMTripleExtractor for relation extraction)
+# One-pass extraction prompt (entities + triples in single LLM call)
 # ---------------------------------------------------------------------------
 
-DEFAULT_TRIPLE_EXTRACTOR_PROMPT = """You are a relation extractor. Extract factual subject-predicate-object triples from the given text.
+DEFAULT_ONEPASS_EXTRACTION_PROMPT = """You are a High-Fidelity Knowledge Graph Extractor. In a SINGLE pass, extract BOTH the entity inventory AND the relational triples from the text. You are the sole authority on what entities and relations exist in the chunk.
 
-TASK: From the text below, identify triples where:
-- subject: a named entity (person, organization, place, event, work, etc.)
-- predicate: a relation type (occupation, born_in, died_in, spouse, member_of, works_at, located_in, founded, etc.)
-- object: the related value (another entity, date, place, role, etc.)
+YOUR TASK:
+1. ENTITY INVENTORY: Identify all named entities (people, organizations, places, events, works, concepts) that appear in the text.
+2. RELATIONAL TRIPLES: Extract subject-predicate-object triples that connect these entities.
 
-RULES:
-- Extract only triples explicitly stated or strongly implied in the text. Do not infer or hallucinate.
-- Use concise, normalized predicates (snake_case, e.g., occupation, born_in, member_of).
-- For dates, use predicates like born_in, died_in, founded_in; objects can be years or full dates.
-- Quote the exact evidence snippet from the text in the "evidence" field.
+SEED ANCHORING (Wikipedia titles):
+The following Wikipedia page titles were detected in this chunk. When an entity in the text matches one of these titles (or is an obvious variant), PREFER using that exact title as the entity surface form. This improves consistency with the knowledge base.
+- If no match exists, create a new entity using the exact form from the text.
+SEED TITLES IN CHUNK:
+{seed_titles_in_chunk}
+
+EXTRACTION STRATEGY:
+1. LINE-BY-LINE & LIST PARSING: Process the text line-by-line. Bulleted lists and glossaries are dense with facts.
+   - When encountering "Item - Description" or "Item : Description", the "Item" is the Subject for ALL relations in that line.
+2. DECENTRALIZED SEARCH: Seek relationships between secondary and tertiary entities. NEVER assign a local fact to the main document topic when the text names a different subject.
+3. PROMOTE ROLES TO PREDICATES: Titles, roles, and structural relationships become the Predicate. BAD: (Tim Cook) --[is]--> (CEO of Apple). GOOD: (Tim Cook) --[ceo_of]--> (Apple).
+4. ATOMIC ENTITIES: Keep Subjects and Objects short and atomic. Strip descriptive modifiers.
+
+STRICT GROUNDING (Anti-Hallucination):
+1. ZERO EXTERNAL KNOWLEDGE: Extract exact, verbatim strings from the text. Do NOT canonicalize names, use real names instead of stage names, or resolve aliases.
+2. VERBATIM EVIDENCE: The `evidence` field is mandatory for every triple. Quote the exact phrase that proves it.
+   - If Subject/Object do not appear in your evidence quote, you have hallucinated. Fix or drop the triple.
+3. Extract ALL valid relational pairs you can find, from the first word to the last line.
+
+PREDICATE RULES:
+- Predicates must be concise snake_case (e.g., born_in, ceo_of, member_of).
+- BANNED: is, was, has, had, mentions, discusses, related_to.
+- EXCEPTION: instance_of, subclass_of, has_profession ONLY when the text explicitly assigns a category.
+
+OUTPUT VIA THE STRUCTURED TOOL:
+- entities: list of {{surface, type}} for each entity (type: PERSON, ORG, GPE, LOC, EVENT, WORK_OF_ART, or NOUN_CHUNK for other).
+- triples: list of {{subj_surface, pred, obj_surface, confidence, evidence}}.
+
+PAGE TITLE (for context):
+{title}
 
 INPUT TEXT:
 {text}
+"""
 
-Output your extracted triples via the structured tool (each triple: subj_surface, pred, obj_surface, confidence 0-1, evidence)."""
 
-
-def get_triple_extractor_prompt() -> str:
-    """Return the triple extractor prompt template. Override via LLM_TRIPLE_PROMPT_FILE env."""
-    path = os.getenv("LLM_TRIPLE_PROMPT_FILE")
+def get_onepass_extraction_prompt() -> str:
+    """Return the one-pass extraction prompt. Override via LLM_ONEPASS_PROMPT_FILE env."""
+    path = os.getenv("LLM_ONEPASS_PROMPT_FILE")
     if path and Path(path).is_file():
         return Path(path).read_text(encoding="utf-8")
-    return DEFAULT_TRIPLE_EXTRACTOR_PROMPT
+    return DEFAULT_ONEPASS_EXTRACTION_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Query entity extraction prompt (for LLMQueryEntityExtractor at retrieval time)
+# ---------------------------------------------------------------------------
+
+DEFAULT_QUERY_ENTITY_PROMPT = """Extract the key entities (people, places, organizations, events, works, concepts) that the user is asking about in this question.
+
+TASK: Return a JSON list of entity strings. Use the exact phrasing from the question when possible. Keep entities atomic and short.
+
+RULES:
+- Extract only entities explicitly mentioned or clearly implied.
+- Do not infer or add entities not in the question.
+- Return an empty list if no clear entities.
+
+QUESTION:
+{query}
+
+Output a JSON array of entity strings, e.g. ["Albert Einstein", "Germany"].
+"""
+
+
+def get_query_entity_extraction_prompt() -> str:
+    """Return the query entity extraction prompt. Override via QUERY_ENTITY_PROMPT_FILE env."""
+    path = os.getenv("QUERY_ENTITY_PROMPT_FILE")
+    if path and Path(path).is_file():
+        return Path(path).read_text(encoding="utf-8")
+    return DEFAULT_QUERY_ENTITY_PROMPT

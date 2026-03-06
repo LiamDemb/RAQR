@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download and warm required models (spaCy, SentenceTransformers, REBEL).
+"""Download and warm required models (spaCy, SentenceTransformers).
 
 Run once with network access. Models are cached for offline use.
 Use HF_HOME / TRANSFORMERS_CACHE to control HuggingFace cache location.
@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 SPACY_MODEL = os.environ.get("SPACY_MODEL", "en_core_web_sm")
 MODEL_NAME = os.environ.get("MODEL_NAME", "all-MiniLM-L6-v2")
-RE_MODEL_NAME = os.environ.get("RE_MODEL_NAME", "Babelscape/rebel-large")
 
 
 def main() -> int:
@@ -46,13 +45,11 @@ def main() -> int:
     SentenceTransformer(MODEL_NAME)
     logger.info("SentenceTransformer model ready.")
 
-    # REBEL (HuggingFace transformers)
-    logger.info("Downloading REBEL model: %s", RE_MODEL_NAME)
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-
-    AutoTokenizer.from_pretrained(RE_MODEL_NAME)
-    AutoModelForSeq2SeqLM.from_pretrained(RE_MODEL_NAME)
-    logger.info("REBEL model ready.")
+    # tiktoken (for chunking - cl100k_base aligns with OpenAI models)
+    logger.info("Downloading tiktoken encoding: cl100k_base")
+    import tiktoken
+    tiktoken.get_encoding("cl100k_base")
+    logger.info("tiktoken encoding ready.")
 
     logger.info("All models downloaded. Caches can be reused offline.")
     return 0

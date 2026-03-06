@@ -3,7 +3,7 @@
 Usage:
     poetry run python scripts/corpus/build_graph_from_corpus.py --corpus data/processed/corpus_llm.jsonl --graph-out data/processed/graph_llm.pkl
 
-Use after collect_llm_triple_batch.py to produce graph_llm.pkl from the LLM-enriched corpus.
+Use after collect_llm_ie_batch.py or as part of build-corpus to produce graph.pkl from the IE-enriched corpus.
 """
 
 from __future__ import annotations

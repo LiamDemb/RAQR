@@ -10,11 +10,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from raqr.entity_alias_resolver import EntityAliasResolver
+from raqr.entity_index_store import EntityIndexStore
 from raqr.generator import SimpleLLMGenerator
 from raqr.graph_store import NetworkXGraphStore
 from raqr.loaders import JsonCorpusLoader
 from raqr.prompts import get_generator_prompt
-from raqr.strategies.graph import GraphStrategy, SpacyQueryEntityExtractor
+from raqr.strategies.graph import GraphStrategy, _default_query_entity_extractor
 
 
 def _check(condition: bool, name: str) -> bool:
@@ -35,6 +36,9 @@ def _build_strategy(output_dir: str, top_k: int, max_hops: int) -> GraphStrategy
         )
     alias_resolver = EntityAliasResolver.from_artifacts(output_dir=output_dir)
     entity_df_by_norm = EntityAliasResolver.load_df_map_from_lexicon(lexicon_path=lexicon_path)
+    entity_index_store = None
+    if os.path.exists(f"{output_dir}/entity_index.faiss") and os.path.exists(f"{output_dir}/entity_index_meta.parquet"):
+        entity_index_store = EntityIndexStore(f"{output_dir}/entity_index.faiss", f"{output_dir}/entity_index_meta.parquet")
     return GraphStrategy(
         graph_store=NetworkXGraphStore(graph_path=graph_path),
         corpus=JsonCorpusLoader(jsonl_path=corpus_path),
@@ -42,10 +46,11 @@ def _build_strategy(output_dir: str, top_k: int, max_hops: int) -> GraphStrategy
             model_id=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             base_prompt=get_generator_prompt(),
         ),
-        entity_extractor=SpacyQueryEntityExtractor(alias_resolver=alias_resolver),
+        entity_extractor=_default_query_entity_extractor(alias_resolver),
         top_k=top_k,
         max_hops=max_hops,
         entity_df_by_norm=entity_df_by_norm,
+        entity_index_store=entity_index_store,
     )
 
 

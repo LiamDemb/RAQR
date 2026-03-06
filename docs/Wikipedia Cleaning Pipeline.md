@@ -81,7 +81,7 @@ Extraction is restricted to `div.mw-parser-output` (main article content). If th
 
 **Stored chunk text** in `corpus.jsonl` keeps original formatting (paragraph breaks, list newlines) for readability and retrieval.
 
-**Entity extraction (spaCy)** and **relation extraction (REBEL)** receive a normalized copy instead:
+**Entity and relation extraction** (LLM IE batch) receive a normalized copy instead:
 
 - Collapse whitespace (replace newlines/multiple spaces with a single space)
 - Strip common Wikipedia artifacts (IPA brackets, `(listen)`)
@@ -89,7 +89,7 @@ Extraction is restricted to `div.mw-parser-output` (main article content). If th
 This reduces noise for NLP models (e.g. stray IPA symbols, fragmented lines) while preserving readable text in the corpus.
 
 **Helper:** `normalize_text_for_extraction()` in `src/raqr/data/canonical_clean.py`  
-**Usage:** `scripts/01_build_corpus.py` — applied only when calling `extract_entities_spacy()` and `extract_relations_rebel()`
+**Usage:** `scripts/01_build_corpus.py` — applied when running extraction (LLM IE batch)
 
 ---
 

@@ -16,6 +16,7 @@ DEFAULT_NOUN_CHUNK_STOPWORD_RATIO_MAX = 0.6
 
 def normalize_key(text: str) -> str:
     s = unicodedata.normalize("NFKC", text).lower()
+    s = re.sub(r"\([^)]*\)", "", s) # Remove anything in brackets
     s = re.sub(r"['’]s\b", "", s)
     s = re.sub(r"[^\w\s-]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
@@ -85,6 +86,57 @@ def _trim_np_tokens(tokens: Iterable[object]) -> List[object]:
     ):
         trimmed.pop()
     return trimmed
+
+
+# Query-only heuristic: entities in questions often appear in Title Case.
+# Matches: "United States", "WWE Talking Smack", "Fabio Fognini"
+_CAPITALIZED_SPAN_PATTERN = re.compile(
+    r"\b(?:[A-Z][a-z]+|[A-Z]{2,})(?:\s+(?:[A-Z][a-z]+|[A-Z]{2,}))*\b"
+)
+_QUERY_STOPLIST = frozenset(
+    {"what", "which", "how", "where", "when", "who", "whose", "why"}
+)
+
+
+_PAREN_PATTERN = re.compile(r"\s*\([^)]*\)\s*")
+
+
+def extract_entities_capitalization(
+    text: str,
+    alias_map: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """Extract entity spans using capitalization heuristic (query-only).
+
+    Entities in questions often appear in Title Case. This regex matches
+    consecutive Title-Case words and 2+ character acronyms. Use with
+    extract_entities_spacy for combined query extraction.
+
+    Parenthetical content (e.g. "(2006 Film)", "(album)") is removed before
+    extraction to avoid matching generic disambiguation words as entities.
+
+    Note: [A-Z] is ASCII-only; accented uppercase (e.g. Čilić) may not match.
+    """
+    alias_map = alias_map or {}
+    # Remove parenthetical content to avoid "Film", "album", etc. from "(2006 Film)"
+    text_no_parens = _PAREN_PATTERN.sub(" ", text)
+    text_no_parens = re.sub(r"\s+", " ", text_no_parens).strip()
+
+    result: List[str] = []
+    seen: set[str] = set()
+    for match in _CAPITALIZED_SPAN_PATTERN.finditer(text_no_parens):
+        surface = match.group(0).strip()
+        if not surface:
+            continue
+        # Skip interrogative words when matched as single token
+        if surface.lower() in _QUERY_STOPLIST:
+            continue
+        norm = norm_entity(surface, alias_map)
+        if not norm or len(norm) < 2:
+            continue
+        if norm not in seen:
+            seen.add(norm)
+            result.append(norm)
+    return result
 
 
 def _extract_noun_chunk_surfaces(

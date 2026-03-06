@@ -49,7 +49,7 @@ This research contains a two-dimensional ablation study:
 ### Input Signals
 
 - **Q-Emb:** DistilBERT [CLS] embedding (768 dims) of the query
-- **Q-Feat:** Engineered features (length/token count, entity density via spaCy, complexity keywords; optional syntax depth)
+- **Q-Feat:** Engineered features (length/token count, entity density from query entity extraction, complexity keywords; optional syntax depth)
 - **Probe:** Top-10 Dense retrieval signals—max score, skewness, semantic dispersion (alias: semantic distance)
 - **Combined:** The router uses Q-Emb + Q-Feat + Probe together
 
