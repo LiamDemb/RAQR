@@ -19,12 +19,12 @@ The Heuristic Router is implemented as a **Priority Cascade**. It evaluates rule
 
 _Implement these exact logic gates in `src/routers/heuristic.py`._
 
-| Priority | Check Type | Condition (Pseudocode) | Route To | Rationale |
-| :--- | :--- | :--- | :--- | :--- |
-| **1** | Regex | `matches(query, r\"(from|between|in) \\d{4}\")` OR `contains(query, \"timeline\", \"history of\")` | **Temporal RAG** | Explicit date constraints. |
-| **2** | Regex | `contains(query, \"connection between\", \"relationship\", \"how does X affect Y\")` | **Graph RAG** | Multi-hop reasoning intent. |
-| **3** | Signal | `Probe.skewness < 0.5` AND `Probe.max_score > 0.65` | **Graph RAG** | Flat distribution implies multiple relevant entities (multi-hop). |
-| **4** | Fallback | `True` | **Dense RAG** | Standard factual lookup. |
+| Priority | Check Type | Condition (Pseudocode)                                                               | Route To      | Rationale                                                         |
+| :------- | :--------- | :----------------------------------------------------------------------------------- | :------------ | :---------------------------------------------------------------- | ---------------- | -------------------------- |
+| **1**    | Regex      | `matches(query, r\"(from                                                             | between       | in) \\d{4}\")`OR`contains(query, \"timeline\", \"history of\")`   | **Temporal RAG** | Explicit date constraints. |
+| **2**    | Regex      | `contains(query, \"connection between\", \"relationship\", \"how does X affect Y\")` | **Graph RAG** | Multi-hop reasoning intent.                                       |
+| **3**    | Signal     | `Probe.skewness < 0.5` AND `Probe.max_score > 0.65`                                  | **Graph RAG** | Flat distribution implies multiple relevant entities (multi-hop). |
+| **4**    | Fallback   | `True`                                                                               | **Dense RAG** | Standard factual lookup.                                          |
 
 _Note: Thresholds (0.5, 0.65, 0.4) are initial hyperparameters. These will be tuned on the Dev Set._
 
@@ -41,7 +41,7 @@ The Lightweight Classifier must process distinct **feature families**: **Q-Emb**
     - Backbone: `DistilBERT-base-uncased` (frozen or fine-tuned).
     - Output: `[CLS]` token embedding (Dimension: 768).
 2.  **Q-Feat + Probe Branch (Signals):**
-    - Q-Feat: length/token count, entity density (via spaCy), complexity keywords; optional syntax depth.
+    - Q-Feat: length/token count, entity density (from query entity extraction), complexity keywords; optional syntax depth.
     - Probe: max score, skewness, semantic dispersion (alias: semantic distance).
     - Input: Vector of floats (dimension depends on active channels).
     - Layer: Batch Normalization (Crucial: scales inputs to 0-1 range).
@@ -62,12 +62,12 @@ The Lightweight Classifier must process distinct **feature families**: **Q-Emb**
 
 **Probe:** Top-10 Dense retrieval signals. The Probe runs a standard Dense retrieval (top-k=10). We extract signals from the resulting `scores` list (cosine similarity):
 
-| Signal                | Definition / Formula                                                                                 | Library Implementation        |
-| :-------------------- | :--------------------------------------------------------------------------------------------------- | :---------------------------- |
-| **Max Score**         | $S_{max} = \max(scores)$                                                                             | `np.max(scores)`              |
-| **Min Score**         | $S_{min} = \min(scores)$                                                                             | `np.min(scores)`              |
-| **Mean Score**        | $\mu = \frac{1}{k}\sum scores$                                                                       | `np.mean(scores)`             |
-| **Skewness**          | Measure of asymmetry. High skew = sharp peak (good). Low skew = flat (ambiguous).                    | `scipy.stats.skew(scores)`    |
+| Signal                  | Definition / Formula                                                                                         | Library Implementation        |
+| :---------------------- | :----------------------------------------------------------------------------------------------------------- | :---------------------------- |
+| **Max Score**           | $S_{max} = \max(scores)$                                                                                     | `np.max(scores)`              |
+| **Min Score**           | $S_{min} = \min(scores)$                                                                                     | `np.min(scores)`              |
+| **Mean Score**          | $\mu = \frac{1}{k}\sum scores$                                                                               | `np.mean(scores)`             |
+| **Skewness**            | Measure of asymmetry. High skew = sharp peak (good). Low skew = flat (ambiguous).                            | `scipy.stats.skew(scores)`    |
 | **Semantic dispersion** | Average distance between the Query Embedding ($Q$) and the Centroid ($C$) of the retrieved chunk embeddings. | `1 - cosine_similarity(Q, C)` |
 
 ## 4. Strategy Implementation Specs
@@ -78,13 +78,13 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
 
 - **Representation:** Relation-aware GraphRAG (Triple Graph) using NetworkX (no Neo4j).
 - **Implementation:**
-    1.  **Ingestion:** Run a lightweight Relation Extraction model (e.g., `Babelscape/rebel-large` or a GLiNER-relation model) over each chunk to extract semantic triples `(subject, predicate, object)`.
+    1.  **Ingestion:** LLM extraction over each chunk to extract entities and semantic triples `(subject, predicate, object)` via the Batch API.
     2.  **Storage:** Store a NetworkX **DiGraph**:
         - **Nodes:** Canonical Entities (normalized strings) and Chunks.
         - **Edges:**
             - **Semantic Edge:** `Entity --predicate--> Entity` (directed relation from extracted triples).
             - **Provenance Edge:** `Entity --> Chunk` (`appears_in`) to link evidence back to text.
-    3.  **Retrieval:** Extract entities from query $\rightarrow$ map to graph entity nodes $\rightarrow$ traverse outgoing **relational** edges (1-hop) $\rightarrow$ collect chunks linked via provenance edges from the expanded entity set.
+    3.  **Retrieval:** Extract entities from query (LLM default) $\rightarrow$ map to graph entity nodes (exact match + optional vector similarity) $\rightarrow$ traverse outgoing **relational** edges (1-hop) $\rightarrow$ collect chunks linked via provenance edges from the expanded entity set.
 
 ### B. TemporalRAG (Metadata Filter, No Temporal KG)
 
@@ -133,3 +133,11 @@ def select_gold_label(results: Dict[str, float]) -> str:
 ```
 
 _This ensures our router is trained to be efficient, not just accuracy-obsessed._
+
+## 6. Token Limits and Truncation
+
+**Chunking:** Uses tiktoken (cl100k_base). Default 500–800 tokens per chunk; configurable via `CHUNK_MIN_TOKENS`, `CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`.
+
+**Embedder (all-MiniLM-L6-v2):** Truncates at 256 tokens internally. No configuration needed.
+
+**LLM IE extraction:** Uses OpenAI Batch API. One LLM call per chunk extracts both entities and triples. Model and max tokens via `LLM_ONEPASS_MODEL`, `LLM_ONEPASS_MAX_TOKENS`.

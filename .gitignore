@@ -16,7 +16,6 @@ yarn-error.log*
 
 # Environment / secrets
 .env
-.env.*
 *.local
 
 # Dependencies
@@ -56,3 +55,5 @@ results/
 
 # Development
 /docs/dev/
+/temp
+/dev

@@ -13,20 +13,11 @@ from typing import List, Optional
 
 from openai import OpenAI
 
-
-DEFAULT_JUDGE_PROMPT = """You are an expert evaluator grading an AI's answer against a Ground Truth reference. 
-Focus strictly on factual and semantic equivalence. Ignore differences in wording, length, or conversational boilerplate.
-
-Grade the AI Answer on this strict 0-2 scale:
-[0] Incorrect / Refusal: The answer is factually wrong, completely misses the core meaning, or states that the context is insufficient.
-[1] Partial / Superficial: The answer contains relevant keywords or partial facts, but misses the specific reasoning, causality, or completeness of the Ground Truth.
-[2] Comprehensive / Correct: The answer fully captures the core facts and logical meaning of the Ground Truth.
-
-Ground Truth: {gold_answers}
-AI Answer: {predicted_answer}
-
-Output ONLY a single integer (0, 1, or 2). Do not output any other text or explanation."""
-
+from raqr.prompts import (
+    DEFAULT_JUDGE_PROMPT,
+    DEFAULT_JUDGE_PROMPT_OLD,
+    get_judge_prompt,
+)
 
 @dataclass
 class LLMJudge:
@@ -48,7 +39,7 @@ class LLMJudge:
         if not self.model_id:
             self.model_id = os.getenv("LLM_JUDGE_MODEL", "gpt-4o-mini")
         if not self.prompt_template:
-            self.prompt_template = DEFAULT_JUDGE_PROMPT
+            self.prompt_template = get_judge_prompt()
         env_temp = os.getenv("LLM_JUDGE_TEMPERATURE")
         if env_temp is not None:
             self.temperature = float(env_temp)

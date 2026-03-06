@@ -95,7 +95,7 @@ This approach keeps the project easy to run for assessors while remaining flexib
 
 - **Deep Learning Framework:** `PyTorch` (v2.0+).
 - **Transformer Library:** `Hugging Face Transformers` (for loading/fine-tuning DistilBERT).
-- **Relation Extraction:** `transformers` (e.g., REBEL) and/or `gliner` (relation models) for extracting semantic triples during ingestion.
+- **Entity & Relation Extraction:** LLM (OpenAI) one-pass extraction via Batch API.
 - **Classical ML:** `Scikit-Learn` (for metrics, skewness calc, SVM baselines if needed).
 
 ### LLM Interface
@@ -186,7 +186,7 @@ Responsible for ingesting datasets and normalizing them into a standard schema.
 Each strategy class inherits from `BaseStrategy`. There are **3** concrete implementations.
 
 1.  **`DenseStrategy`:** Custom FAISS indexing (`FaissIndexStore`) + `SentenceTransformersEmbedder`; maps row IDs to chunk texts via `vector_meta.parquet`.
-2.  **`GraphStrategy`:** Relation-aware traversal using **predicate edges** (Subject-Predicate-Object triples) and **provenance edges** (Entity $\rightarrow$ Chunk). Query entity extraction uses the same normalization policy as ingestion (NER + optional noun-chunk augmentation), then `NetworkX` triple traversal (1-hop) resolves evidence chunks via provenance edges.
+2.  **`GraphStrategy`:** Relation-aware traversal using **predicate edges** (Subject-Predicate-Object triples) and **provenance edges** (Entity $\rightarrow$ Chunk). Query entity extraction uses an **LLM call** (default) to extract entities from the question; optionally **vector similarity** against an entity index bridges alternate phrasings (e.g. "Einstein" $\rightarrow$ "Albert Einstein"). NetworkX triple traversal (1-hop) resolves evidence chunks via provenance edges.
 3.  **`TemporalStrategy`:** FAISS candidate pool (vector search) + explicit year metadata filter. Date extraction (Regex/LLM) $\rightarrow$ retrieve deeper candidate set $\rightarrow$ filter by `year` metadata (refill from deeper ranks until \(k\) contexts). **No temporal KG;** Temporal RAG is metadata-filtered dense retrieval only.
 
 ### C. The Probe Module (`src/probe`)

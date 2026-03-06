@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 from raqr.entity_alias_resolver import EntityAliasResolver
 from raqr.graph_store import NetworkXGraphStore
-from raqr.strategies.graph import SpacyQueryEntityExtractor
+from raqr.strategies.graph import _default_query_entity_extractor
 
 
 def _iter_jsonl(path: str):
@@ -57,7 +57,7 @@ def main() -> int:
         )
     graph = NetworkXGraphStore(graph_path=graph_path).load()
     alias_resolver = EntityAliasResolver.from_artifacts(output_dir=args.output_dir)
-    extractor = SpacyQueryEntityExtractor(alias_resolver=alias_resolver)
+    extractor = _default_query_entity_extractor(alias_resolver)
 
     total_queries = 0
     queries_with_match = 0

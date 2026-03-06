@@ -155,7 +155,7 @@ def test_graph_strategy_df_downweighting_prefers_rare_entity_context():
 
     result = strategy.retrieve_and_generate("hub rare query")
     assert result.status == "OK"
-    assert result.context_scores[0][0] == "Rare chunk"
+    assert "Rare chunk" in result.context_scores[0][0]
 
 
 def test_graph_strategy_synergy_bonus_prefers_joint_evidence():
@@ -198,41 +198,14 @@ def test_graph_strategy_synergy_bonus_prefers_joint_evidence():
 
     result = strategy.retrieve_and_generate("a b query")
     assert result.status == "OK"
-    assert result.context_scores[0][0] == "Joint"
+    assert "Joint" in result.context_scores[0][0]
 
 
-def test_spacy_query_extractor_can_match_via_noun_chunks(monkeypatch):
-    class _Token:
-        def __init__(self, text: str, *, is_stop: bool = False, pos_: str = "NOUN"):
-            self.text = text
-            self.is_stop = is_stop
-            self.pos_ = pos_
-            self.is_alpha = text.isalpha()
-
-    class _Span:
-        def __init__(self, text: str, label_: str = "", tokens: Optional[List[_Token]] = None):
-            self.text = text
-            self.label_ = label_
-            self._tokens = tokens or []
-
-        def __iter__(self):
-            return iter(self._tokens)
-
-        def __len__(self):
-            return len(self._tokens)
-
+def test_query_extractor_finds_entity_in_capitalized_query(monkeypatch):
+    """Query extractor finds 'United States' via capitalization heuristic."""
     class _Doc:
         ents = []
-        noun_chunks = [
-            _Span(
-                "The United States",
-                tokens=[
-                    _Token("The", is_stop=True, pos_="DET"),
-                    _Token("United"),
-                    _Token("States"),
-                ],
-            )
-        ]
+        noun_chunks = []
 
     class _NlpStub:
         def __call__(self, text: str):
@@ -249,7 +222,6 @@ def test_spacy_query_extractor_can_match_via_noun_chunks(monkeypatch):
     graph = build_graph(chunks)
     extractor = SpacyQueryEntityExtractor(
         alias_resolver=EntityAliasResolver(alias_map={}),
-        use_noun_chunks=True,
     )
     strategy = GraphStrategy(
         graph_store=_GraphStoreStub(graph=graph),

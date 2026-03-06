@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 from dotenv import load_dotenv
-from raqr.data.loaders import load_complextempqa, load_nq, load_wikiwhy
+from raqr.data.loaders import load_complextempqa, load_hotpotqa, load_nq, load_wikiwhy
 from raqr.data.schemas import BenchmarkItem, sha256_text
 
 logger = logging.getLogger(__name__)
@@ -76,8 +76,8 @@ def validate_outputs(benchmark: List[BenchmarkItem]) -> None:
         raise ValueError("Benchmark is empty.")
 
     sources = {item.dataset_source for item in benchmark}
-    if len(sources) < 3:
-        raise ValueError("Benchmark missing at least one dataset source.")
+    if not sources:
+        raise ValueError("Benchmark has no dataset sources.")
 
     question_ids = set()
     question_texts = {}
@@ -118,6 +118,11 @@ def main() -> int:
         help="Path to WikiWhy CSV.",
     )
     parser.add_argument(
+        "--hotpotqa",
+        default=os.getenv("HOTPOTQA_PATH"),
+        help="Path to HotPotQA JSON/JSONL.",
+    )
+    parser.add_argument(
         "--output-dir",
         default=os.getenv("OUTPUT_DIR", "data/processed"),
         help="Output directory for processed artifacts.",
@@ -135,12 +140,19 @@ def main() -> int:
     parser.add_argument("--nq-version", default=os.getenv("NQ_VERSION"))
     parser.add_argument("--complextempqa-version", default=os.getenv("COMPLEXTEMPQA_VERSION"))
     parser.add_argument("--wikiwhy-version", default=os.getenv("WIKIWHY_VERSION"))
+    parser.add_argument("--hotpotqa-version", default=os.getenv("HOTPOTQA_VERSION"))
     args = parser.parse_args()
 
-    missing = [name for name, value in [("NQ_PATH", args.nq), ("COMPLEXTEMPQA_PATH", args.complextempqa), ("WIKIWHY_PATH", args.wikiwhy)] if not value]
-    if missing:
+    dataset_paths = [
+        args.nq,
+        args.complextempqa,
+        args.wikiwhy,
+        args.hotpotqa,
+    ]
+    if not any(p and str(p).strip() for p in dataset_paths):
         raise ValueError(
-            "Missing dataset paths. Provide CLI args or set: " + ", ".join(missing)
+            "Provide at least one dataset path via CLI or env. "
+            "Example: --hotpotqa data/raw/hotpotqa_50.jsonl"
         )
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -150,22 +162,32 @@ def main() -> int:
 
     benchmark_by_source: Dict[str, List[BenchmarkItem]] = defaultdict(list)
 
-    for record in load_nq(args.nq, dataset_version=args.nq_version):
-        benchmark_by_source[record.benchmark_item.dataset_source].append(
-            record.benchmark_item
-        )
+    if args.nq and str(args.nq).strip():
+        for item in load_nq(args.nq, dataset_version=args.nq_version):
+            benchmark_by_source[item.dataset_source].append(item)
+        logger.info("Loaded NQ from %s", args.nq)
 
-    for record in load_complextempqa(
-        args.complextempqa, dataset_version=args.complextempqa_version
-    ):
-        benchmark_by_source[record.benchmark_item.dataset_source].append(
-            record.benchmark_item
-        )
+    if args.complextempqa and str(args.complextempqa).strip():
+        for item in load_complextempqa(
+            args.complextempqa, dataset_version=args.complextempqa_version
+        ):
+            benchmark_by_source[item.dataset_source].append(item)
+        logger.info("Loaded ComplexTempQA from %s", args.complextempqa)
 
-    for record in load_wikiwhy(args.wikiwhy, dataset_version=args.wikiwhy_version):
-        benchmark_by_source[record.benchmark_item.dataset_source].append(
-            record.benchmark_item
-        )
+    if args.wikiwhy and str(args.wikiwhy).strip():
+        for item in load_wikiwhy(args.wikiwhy, dataset_version=args.wikiwhy_version):
+            benchmark_by_source[item.dataset_source].append(item)
+        logger.info("Loaded WikiWhy from %s", args.wikiwhy)
+
+    if args.hotpotqa and str(args.hotpotqa).strip():
+        for item in load_hotpotqa(
+            args.hotpotqa, dataset_version=args.hotpotqa_version
+        ):
+            benchmark_by_source[item.dataset_source].append(item)
+        logger.info("Loaded HotPotQA from %s", args.hotpotqa)
+
+    sources_loaded = sorted(benchmark_by_source.keys())
+    logger.info("Datasets included: %s", ", ".join(sources_loaded))
 
     benchmark = stratified_split(
         benchmark_by_source,

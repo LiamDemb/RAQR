@@ -14,6 +14,7 @@ from raqr.index_store import FaissIndexStore
 from raqr.loaders import VectorMetaMapper, JsonCorpusLoader
 from raqr.embedder import SentenceTransformersEmbedder
 from raqr.generator import SimpleLLMGenerator
+from raqr.prompts import get_generator_prompt
 
 strategy = DenseStrategy(
     index_store=FaissIndexStore(index_path=index_path),
@@ -21,7 +22,7 @@ strategy = DenseStrategy(
     embedder=SentenceTransformersEmbedder(model_name="all-MiniLM-L6-v2"),
     generator=SimpleLLMGenerator(
         model_id=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        base_prompt="Answer the question based only on the provided context. If the context does not contain the answer, say so.",
+        base_prompt=get_generator_prompt(),
     ),
     corpus=JsonCorpusLoader(jsonl_path=corpus_path),
     top_k=int(os.getenv("DENSE_TOP_K", 10)),

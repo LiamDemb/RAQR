@@ -5,6 +5,7 @@ import pytest
 from raqr.data.build_graph import build_graph
 from raqr.data.canonical_clean import clean_html_to_structured_doc
 from raqr.data.chunking import chunk_blocks
+from raqr.data.corpus_schemas import Block
 from raqr.data.docstore import DocRecord, DocStore
 from raqr.data.alias_map import normalize_alias_map
 from raqr.data.enrich_entities import norm_entity
@@ -74,12 +75,72 @@ def test_norm_entity_alias():
 
 def test_chunk_blocks_bounds():
     blocks = [
-        type("B", (), {"text": "word " * 300, "section_path": ["Lead"], "block_type": "paragraph"})(),
-        type("B", (), {"text": "word " * 300, "section_path": ["Lead"], "block_type": "paragraph"})(),
+        Block(text="word " * 300, section_path=["Lead"], block_type="paragraph"),
+        Block(text="word " * 300, section_path=["Lead"], block_type="paragraph"),
     ]
-    chunks = chunk_blocks(blocks, min_tokens=200, max_tokens=500, overlap_tokens=50)
+    chunks = chunk_blocks(
+        blocks,
+        min_tokens=200,
+        max_tokens=500,
+        overlap_tokens=50,
+    )
     assert len(chunks) >= 1
     assert all(chunk.token_count >= 200 for chunk in chunks)
+    assert all(chunk.token_count <= 500 for chunk in chunks)
+
+
+def test_chunk_blocks_respects_max_tokens():
+    """No chunk exceeds max_tokens (tiktoken cl100k_base)."""
+    blocks = [
+        Block(text="The quick brown fox " * 100, section_path=["Lead"], block_type="paragraph"),
+    ]
+    max_tokens = 200
+    chunks = chunk_blocks(
+        blocks,
+        min_tokens=50,
+        max_tokens=max_tokens,
+        overlap_tokens=20,
+    )
+    assert len(chunks) >= 1
+    for chunk in chunks:
+        assert chunk.token_count <= max_tokens, f"chunk has {chunk.token_count} tokens, max={max_tokens}"
+
+
+def test_chunk_blocks_long_block_splitting():
+    """Single block exceeding max_tokens is split into multiple chunks."""
+    long_text = "The history of computing spans many decades. " * 80
+    blocks = [Block(text=long_text, section_path=["History"], block_type="paragraph")]
+    max_tokens = 200
+    chunks = chunk_blocks(
+        blocks,
+        min_tokens=50,
+        max_tokens=max_tokens,
+        overlap_tokens=30,
+    )
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert chunk.token_count <= max_tokens
+
+
+def test_chunk_blocks_hard_caps_max_even_below_min():
+    """
+    Regression: previously we could exceed max_tokens if the buffer hadn't yet reached
+    min_tokens (because we only flushed once buf_tokens >= min_tokens).
+    """
+    blocks = [
+        Block(text="word " * 600, section_path=["Lead"], block_type="paragraph"),
+        Block(text="word " * 250, section_path=["Lead"], block_type="paragraph"),
+    ]
+    max_tokens = 800
+    chunks = chunk_blocks(
+        blocks,
+        min_tokens=700,
+        max_tokens=max_tokens,
+        overlap_tokens=50,
+    )
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert chunk.token_count <= max_tokens, f"chunk has {chunk.token_count} tokens, max={max_tokens}"
 
 
 def test_build_graph_nodes():

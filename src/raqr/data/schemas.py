@@ -1,27 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 
 def sha256_text(value: str) -> str:
     normalized = value.strip().encode("utf-8")
     return hashlib.sha256(normalized).hexdigest()
-
-
-@dataclass(frozen=True)
-class Document:
-    id: str
-    content: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-    def to_json(self) -> Dict[str, Any]:
-        return {
-            "id": self.id,
-            "content": self.content,
-            "metadata": dict(self.metadata),
-        }
 
 
 @dataclass(frozen=True)

@@ -54,6 +54,11 @@ def main() -> int:
         action="store_true",
         help="Print each question and winner.",
     )
+    parser.add_argument(
+        "--print-disagreements",
+        action="store_true",
+        help="Print questions where Graph and Dense disagree (different judge scores), grouped by (Graph score, Dense score).",
+    )
     args = parser.parse_args()
 
     benchmark_path = Path(args.benchmark)
@@ -105,6 +110,8 @@ def main() -> int:
         }
 
     by_source: dict[str, dict] = defaultdict(_source_entry)
+    # Disagreements: (graph_score, dense_score) -> list of (idx, question, gold_answers, pred_dense, pred_graph)
+    disagreements: dict[tuple[int, int], list[dict]] = defaultdict(list)
 
     for idx, sample in enumerate(samples):
         question = sample.get("question", "")
@@ -138,6 +145,15 @@ def main() -> int:
             graph_wins += 1
             by_source[source]["graph_wins"] += 1
             winner = "Graph"
+
+        if score_dense != score_graph or (score_dense == 0 and score_graph == 0) and args.print_disagreements:
+            disagreements[(score_graph, score_dense)].append({
+                "idx": idx + 1,
+                "question": question,
+                "gold_answers": gold_raw,
+                "pred_dense": pred_dense,
+                "pred_graph": pred_graph,
+            })
 
         if args.verbose:
             def _trunc(s: str, n: int = 50) -> str:
@@ -184,6 +200,25 @@ def main() -> int:
         gw = r["graph_wins"]
         print(f"  {key:20s}  Dense {dw}/{t}   Graph {gw}/{t}")
     print()
+
+    # Disagreements (grouped by Graph score, Dense score), plus both-0
+    if args.print_disagreements and disagreements:
+        _trunc = lambda s, n=60: s[:n] + "..." if len(s) > n else s
+        group_order = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 2), (2, 1), (2, 0)]
+        print("Disagreements (Graph ≠ Dense judge scores) + both scored 0:")
+        print("=" * 60)
+        for g, d in group_order:
+            items = disagreements.get((g, d), [])
+            if not items:
+                continue
+            print(f"\n  Graph {g}, Dense {d} ({len(items)} question{'s' if len(items) != 1 else ''}):")
+            for it in items:
+                print(f"    [{it['idx']}] {_trunc(it['question'])}")
+        print()
+    elif args.print_disagreements:
+        print("No disagreements (Graph and Dense had identical scores for all questions).")
+        print()
+
     return 0
 
 
