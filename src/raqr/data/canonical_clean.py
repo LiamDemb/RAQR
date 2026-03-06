@@ -6,6 +6,7 @@ from typing import List
 from bs4 import BeautifulSoup
 
 from .corpus_schemas import Block, StructuredDoc
+from .infobox_rewrite import is_infobox_table, linearize_infobox_table
 
 
 def normalize_text_for_extraction(text: str) -> str:
@@ -122,6 +123,11 @@ def clean_html_to_structured_doc(
             current_path = _update_section_path(
                 current_path, node.get_text(" ", strip=True), node.name
             )
+            text = node.get_text(" ", strip=True)
+            if text:
+                blocks.append(
+                    Block(text=text, section_path=list(current_path), block_type="paragraph")
+                )
         elif node.name == "p":
             text = node.get_text(" ", strip=True)
             if text:
@@ -142,7 +148,10 @@ def clean_html_to_structured_doc(
                     Block(text=text, section_path=list(current_path), block_type="list")
                 )
         elif node.name == "table":
-            text = _table_to_text(node)
+            if is_infobox_table(node):
+                text = linearize_infobox_table(node)
+            else:
+                text = _table_to_text(node)
             if text:
                 blocks.append(
                     Block(text=text, section_path=list(current_path), block_type="table")

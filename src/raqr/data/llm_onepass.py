@@ -189,13 +189,13 @@ class LLMOnepassExtractor:
 
     def __post_init__(self) -> None:
         if not self.model_id:
-            self.model_id = os.getenv("LLM_ONEPASS_MODEL", "gpt-4o-mini")
+            self.model_id = os.getenv("LLM_IE_MODEL", "gpt-4o-mini")
         if self.temperature == 0.0:
-            env_temp = os.getenv("LLM_ONEPASS_TEMPERATURE")
+            env_temp = os.getenv("LLM_IE_TEMPERATURE")
             if env_temp is not None:
                 self.temperature = float(env_temp)
         if self.max_tokens <= 0:
-            self.max_tokens = int(os.getenv("LLM_ONEPASS_MAX_TOKENS", "2048"))
+            self.max_tokens = int(os.getenv("LLM_IE_MAX_TOKENS", "2048"))
         if not self.prompt_template:
             from raqr.prompts import get_onepass_extraction_prompt
             self.prompt_template = get_onepass_extraction_prompt()
@@ -267,9 +267,9 @@ def build_onepass_chat_request(
     max_tokens: int | None = None,
 ) -> Dict[str, Any]:
     """Build body dict for /v1/chat/completions used by Batch API."""
-    model_id = model_id or os.getenv("LLM_ONEPASS_MODEL", "gpt-4o-mini")
-    temperature = temperature if temperature is not None else float(os.getenv("LLM_ONEPASS_TEMPERATURE", "0"))
-    max_tokens = max_tokens if max_tokens is not None else int(os.getenv("LLM_ONEPASS_MAX_TOKENS", "2048"))
+    model_id = model_id or os.getenv("LLM_IE_MODEL", "gpt-4o-mini")
+    temperature = temperature if temperature is not None else float(os.getenv("LLM_IE_TEMPERATURE", "0"))
+    max_tokens = max_tokens if max_tokens is not None else int(os.getenv("LLM_IE_MAX_TOKENS", "2048"))
     return {
         "model": model_id,
         "messages": [{"role": "user", "content": prompt}],
