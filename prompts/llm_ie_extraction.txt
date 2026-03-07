@@ -44,8 +44,8 @@ PREDICATE RULES:
 - EXCEPTION: instance_of, subclass_of, has_profession ONLY when the text explicitly assigns a category.
 
 OUTPUT VIA THE STRUCTURED TOOL:
-- entities: list of {surface, type} for each entity (type: PERSON, ORG, DATE, GPE, LOC, EVENT, WORK_OF_ART, or NOUN_CHUNK for other).
-- triples: list of {subj_surface, pred, obj_surface, confidence, evidence}.
+- entities: list of {{surface, type}} for each entity (type: PERSON, ORG, DATE, GPE, LOC, EVENT, WORK_OF_ART, or NOUN_CHUNK for other).
+- triples: list of {{subj_surface, pred, obj_surface, confidence, evidence}}.
 
 PAGE TITLE (for context):
 {title}

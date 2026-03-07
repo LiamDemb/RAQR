@@ -149,7 +149,7 @@ def clean_html_to_structured_doc(
                 )
         elif node.name == "table":
             if is_infobox_table(node):
-                text = linearize_infobox_table(node)
+                text = linearize_infobox_table(node, title)
             else:
                 text = _table_to_text(node)
             if text:
