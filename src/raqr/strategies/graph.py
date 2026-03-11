@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import math
+import logging
 import os
 import time
-import logging
-from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 
 import networkx as nx
 
+from raqr.embedder import Embedder
 from raqr.entity_alias_resolver import EntityAliasResolver
 from raqr.entity_index_store import EntityIndexStore
 from raqr.generator import Generator
@@ -17,213 +16,374 @@ from raqr.graph_store import NetworkXGraphStore
 from raqr.loaders import ChunkIdToText
 from raqr.query_entity_extractor import LLMQueryEntityExtractor
 from raqr.strategies.base import BaseStrategy, StrategyResult
-from raqr.data.enrich_entities import (
-    extract_entities_capitalization,
-    extract_entities_spacy,
-    load_spacy,
-)
+from raqr.graph_grounding import ground_path
+from raqr.graph_paths import enumerate_candidate_paths
+from raqr.graph_scoring import score_bundle
+from raqr.graph_types import EvidenceBundle, GraphPath
+from raqr.scoring_config import ScoringConfig, DEFAULT_SCORING_CONFIG
 
 
 logger = logging.getLogger(__name__)
 
 
 class QueryEntityExtractor(Protocol):
-    def extract(self, query: str) -> List[str]:
-        ...
+    def extract(self, query: str) -> List[str]: ...
 
 
-def _default_query_entity_extractor(alias_resolver: EntityAliasResolver) -> QueryEntityExtractor:
+def _default_query_entity_extractor(
+    alias_resolver: EntityAliasResolver,
+) -> QueryEntityExtractor:
     """Return LLM-based query entity extractor."""
     return LLMQueryEntityExtractor(alias_resolver=alias_resolver)
 
 
 @dataclass
-class SpacyQueryEntityExtractor:
-    """Legacy query entity extractor: capitalization heuristic + spaCy NER. Use QUERY_ENTITY_EXTRACTOR=spacy."""
-
-    alias_resolver: EntityAliasResolver
-    spacy_model: str = os.getenv("SPACY_MODEL", "en_core_web_sm")
-    _nlp: Optional[object] = None
-
-    def _ensure_loaded(self) -> None:
-        if self._nlp is None:
-            self._nlp = load_spacy(
-                self.spacy_model,
-                use_noun_chunks=False,
-            )
-
-    def extract(self, query: str) -> List[str]:
-        self._ensure_loaded()
-        alias_map = self.alias_resolver.alias_map
-        cap_norms = set(extract_entities_capitalization(query, alias_map))
-        spacy_ents = extract_entities_spacy(
-            text=query,
-            nlp=self._nlp,
-            alias_map=alias_map,
-            use_noun_chunks=False,
-        )
-        spacy_norms = {e["norm"] for e in spacy_ents if e.get("norm")}
-        return sorted(cap_norms | spacy_norms)
-
-
-@dataclass
 class GraphStrategy(BaseStrategy):
+    """
+    Graph-based retrieval strategy using:
+
+        query -> start entity nodes -> candidate graph paths
+              -> grounded evidence bundles -> bundle ranking
+              -> supporting chunk contexts -> generation
+
+    This version uses the LLM query entity extractor by default.
+    """
+
     name = "Graph"
+
     graph_store: NetworkXGraphStore = None
     corpus: ChunkIdToText = None
     generator: Generator = None
-    entity_extractor: QueryEntityExtractor = None
-    top_k: int = int(os.getenv("GRAPH_TOP_K", "10"))
-    max_hops: int = int(os.getenv("GRAPH_MAX_HOPS", "1"))
-    entity_df_by_norm: Optional[Dict[str, int]] = None
+    embedder: Embedder = None
+
+    entity_extractor: Optional[QueryEntityExtractor] = None
+    alias_resolver: Optional[EntityAliasResolver] = None
     entity_index_store: Optional[EntityIndexStore] = None
+
+    top_k: int = int(os.getenv("GRAPH_TOP_K", "10"))
+    max_hops: int = int(os.getenv("GRAPH_MAX_HOPS", "2"))
+    max_paths_per_start: int = int(os.getenv("GRAPH_MAX_PATHS_PER_START", "50"))
+
     entity_vector_top_k: int = int(os.getenv("GRAPH_ENTITY_VECTOR_TOP_K", "3"))
-    entity_vector_threshold: float = float(os.getenv("GRAPH_ENTITY_VECTOR_THRESHOLD", "0.5"))
-    start_entity_weight: float = float(os.getenv("GRAPH_START_ENTITY_WEIGHT", "2.0"))
-    expanded_entity_weight: float = float(os.getenv("GRAPH_EXPANDED_ENTITY_WEIGHT", "1.0"))
-    synergy_gamma: float = float(os.getenv("GRAPH_SYNERGY_GAMMA", "0.5"))
-    bidirectional: bool = field(
-        default_factory=lambda: os.getenv("GRAPH_BIDIRECTIONAL", "false").lower()
-        in ("1", "true", "yes")
+    entity_vector_threshold: float = float(
+        os.getenv("GRAPH_ENTITY_VECTOR_THRESHOLD", "0.5")
     )
 
-    _graph: Optional[nx.DiGraph] = None
-    _queries_seen: int = 0
-    _queries_with_match: int = 0
+    bidirectional: bool = field(
+        default_factory=lambda: os.getenv("GRAPH_BIDIRECTIONAL", "true").lower()
+        in ("1", "true", "yes")
+    )
+    hop_support_threshold: float = float(
+        os.getenv("GRAPH_HOP_SUPPORT_THRESHOLD", "0.5")
+    )
+
+    scoring_config: ScoringConfig = field(default_factory=lambda: DEFAULT_SCORING_CONFIG)
+
+    _graph: Optional[nx.DiGraph] = field(default=None, init=False, repr=False)
+    _queries_seen: int = field(default=0, init=False, repr=False)
+    _queries_with_match: int = field(default=0, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.graph_store is None:
+            raise ValueError("GraphStrategy requires graph_store")
+        if self.corpus is None:
+            raise ValueError("GraphStrategy requires corpus")
+        if self.generator is None:
+            raise ValueError("GraphStrategy requires generator")
+        if self.embedder is None:
+            raise ValueError("GraphStrategy requires embedder")
+
+        if self.entity_extractor is None:
+            if self.alias_resolver is None:
+                raise ValueError(
+                    "GraphStrategy requires alias_resolver when entity_extractor is not provided"
+                )
+            self.entity_extractor = LLMQueryEntityExtractor(
+                alias_resolver=self.alias_resolver
+            )
 
     def _ensure_loaded(self) -> None:
         if self._graph is None:
             self._graph = self.graph_store.load()
 
     @staticmethod
-    def _chunk_id_from_node(node_id: str) -> Optional[str]:
-        if node_id.startswith("C:"):
-            return node_id[2:]
-        return None
+    def _entity_display(node_id: str) -> str:
+        return node_id[2:] if node_id.startswith("E:") else node_id
 
-    def _expand_relational_entities(
-        self,
-        start_nodes: Set[str],
-        rel_edges: Optional[List[Tuple[str, str, str]]] = None,
-    ) -> Set[str]:
-        if self.max_hops <= 0:
-            return set(start_nodes)
-
-        frontier = set(start_nodes)
-        visited = set(start_nodes)  # Prevents backtracking: never re-enter A after A→B
-        for _ in range(self.max_hops):
-            next_frontier: Set[str] = set()
-            for source in frontier:
-                # Forward: follow outgoing relation edges
-                for _, target, data in self._graph.out_edges(source, data=True):
-                    if data.get("kind") != "rel":
-                        continue
-                    if self._graph.nodes.get(target, {}).get("kind") != "entity":
-                        continue
-                    if rel_edges is not None:
-                        rel_edges.append((source, target, str(data.get("label") or "")))
-                    if target not in visited:  # Skip: prevents A→B→A backtracking
-                        visited.add(target)
-                        next_frontier.add(target)
-                # Backward: follow incoming relation edges when bidirectional
-                if self.bidirectional:
-                    for neighbor, _, data in self._graph.in_edges(source, data=True):
-                        if data.get("kind") != "rel":
-                            continue
-                        if self._graph.nodes.get(neighbor, {}).get("kind") != "entity":
-                            continue
-                        if rel_edges is not None:
-                            label = str(data.get("label") or "")
-                            rel_edges.append((source, neighbor, f"inv:{label}"))
-                        if neighbor not in visited:  # Skip: prevents A→B→A backtracking
-                            visited.add(neighbor)
-                            next_frontier.add(neighbor)
-            frontier = next_frontier
-            if not frontier:
-                break
-        return visited
-
-    def _entity_df_weight(self, entity_node: str) -> float:
-        if not entity_node.startswith("E:"):
-            return 1.0
-        norm = entity_node[2:]
-        df = (self.entity_df_by_norm or {}).get(norm, 0)
-        if df < 0:
-            df = 0
-        return 1.0 / math.sqrt(1.0 + float(df))
-
-    @staticmethod
-    def _entity_display(name: str) -> str:
-        """Strip E: prefix for readable path formatting."""
-        return name[2:] if name.startswith("E:") else name
-
-    def _get_paths_to_entities(
-        self,
-        start_nodes: Set[str],
-        rel_edges: List[Tuple[str, str, str]],
-    ) -> Dict[str, List[str]]:
-        """Build shortest path from each start to each entity reachable via rel_edges.
-        Returns entity_node -> list of path strings (one per start that reaches it).
+    def _resolve_start_nodes(
+        self, extracted_norms: List[str]
+    ) -> Tuple[Set[str], List[str], List[Dict[str, Any]]]:
         """
-        if not rel_edges:
-            return {n: [self._entity_display(n)] for n in start_nodes}
-        # Build adjacency: source -> [(target, label), ...]
-        adj: Dict[str, List[Tuple[str, str]]] = {}
-        for source, target, label in rel_edges:
-            adj.setdefault(source, []).append((target, label))
-        result: Dict[str, List[str]] = {}
-        for start in start_nodes:
-            # BFS from start, store (parent, edge_label) for backtracking
-            prev: Dict[str, Tuple[str, str]] = {}  # node -> (parent, label)
-            queue: deque = deque([start])
-            prev[start] = (start, "")  # sentinel
-            while queue:
-                node = queue.popleft()
-                for target, label in adj.get(node, []):
-                    if target not in prev:
-                        prev[target] = (node, label)
-                        queue.append(target)
-            for entity, (parent, label) in prev.items():
-                if entity == start:
-                    path_str = self._entity_display(start)
-                else:
-                    # Backtrack to build chain: start -[l1]-> n1 -[l2]-> ... -> entity
-                    chain: List[Tuple[str, str]] = []  # (label, node)
-                    cur = entity
-                    while cur in prev:
-                        p, l = prev[cur]
-                        if p == cur:
-                            break
-                        chain.append((l, cur))
-                        cur = p
-                    # Format: start -[l1]-> n1 -[l2]-> n2 ...
-                    segs = [self._entity_display(start)]
-                    for l, n in reversed(chain):
-                        segs.append(f"-[{l}]-> {self._entity_display(n)}")
-                    path_str = " ".join(segs)
-                result.setdefault(entity, []).append(path_str)
-        return result
+        Resolve extracted entity norms to graph entity nodes.
+        Falls back to vector search when available.
+        """
+        candidate_nodes = {f"E:{norm}" for norm in extracted_norms}
+        start_nodes = {node for node in candidate_nodes if self._graph.has_node(node)}
 
-    def _format_chunk_with_paths(
-        self,
-        chunk_id: str,
-        text: str,
-        chunk_to_entities: Dict[str, Set[str]],
-        entity_paths: Dict[str, List[str]],
-    ) -> str:
-        """Prepend path metadata to chunk text for generator context."""
-        entities = chunk_to_entities.get(chunk_id, set())
-        paths: List[str] = []
+        vector_matches: List[Dict[str, Any]] = []
+        unmatched_norms = sorted(
+            norm for norm in extracted_norms if f"E:{norm}" not in start_nodes
+        )
+
+        if unmatched_norms and self.entity_index_store:
+            for norm in unmatched_norms:
+                matches = self.entity_index_store.search(
+                    norm,
+                    top_k=self.entity_vector_top_k,
+                    threshold=self.entity_vector_threshold,
+                )
+                for match_norm, score in matches:
+                    node = f"E:{match_norm}"
+                    if not self._graph.has_node(node):
+                        continue
+                    start_nodes.add(node)
+                    vector_matches.append(
+                        {
+                            "query_norm": norm,
+                            "matched_norm": match_norm,
+                            "score": float(score),
+                        }
+                    )
+
+        unresolved = sorted(
+            norm for norm in extracted_norms if f"E:{norm}" not in start_nodes
+        )
+        return start_nodes, unresolved, vector_matches
+
+    def _format_path(self, path: GraphPath) -> str:
+        if not path.hops:
+            return self._entity_display(path.start_node)
+
+        parts = [self._entity_display(path.hops[0].source)]
+        for hop in path.hops:
+            relation = (
+                f"inv:{hop.relation}"
+                if getattr(hop, "is_reverse", False)
+                else hop.relation
+            )
+            parts.append(f"-[{relation}]-> {self._entity_display(hop.target)}")
+        return " ".join(parts)
+
+    def _bundle_signature(self, bundle: EvidenceBundle) -> Tuple[Any, ...]:
+        hop_sig = tuple(
+            (
+                hop.source,
+                hop.relation,
+                bool(getattr(hop, "is_reverse", False)),
+                hop.target,
+            )
+            for hop in bundle.path.hops
+        )
+        chunk_sig = tuple(sorted(set(bundle.supporting_chunk_ids)))
+        return hop_sig, chunk_sig
+
+    def _format_bundle_context(self, bundle: EvidenceBundle) -> Optional[str]:
+        """
+        Format a grounded evidence bundle into the context passed to the generator.
+        """
+        unique_chunk_ids: List[str] = []
         seen: Set[str] = set()
-        for entity in entities:
-            for path_str in entity_paths.get(entity, [self._entity_display(entity)]):
-                if path_str not in seen:
-                    seen.add(path_str)
-                    paths.append(path_str)
-        if not paths:
-            return text
-        prefix = "Relevant because: " + "; ".join(paths[:3])  # cap at 3 paths
-        return f"[{prefix}]\n\n{text}"
+        for chunk_id in bundle.supporting_chunk_ids:
+            if chunk_id in seen:
+                continue
+            seen.add(chunk_id)
+            unique_chunk_ids.append(chunk_id)
+
+        chunk_texts: List[str] = []
+        for chunk_id in unique_chunk_ids:
+            text = self.corpus.get_text(chunk_id)
+            if text:
+                chunk_texts.append(text)
+
+        if not chunk_texts:
+            return None
+
+        prefix = f"[Relevant because: {self._format_path(bundle.path)}]"
+        return prefix + "\n\n" + "\n\n".join(chunk_texts)
+
+    def _path_to_debug(self, path: GraphPath) -> Dict[str, Any]:
+        return {
+            "start_node": path.start_node,
+            "hops": [
+                {
+                    "source": hop.source,
+                    "relation": hop.relation,
+                    "is_reverse": bool(getattr(hop, "is_reverse", False)),
+                    "target": hop.target,
+                }
+                for hop in path.hops
+            ],
+        }
+
+    def _bundle_to_debug(
+        self,
+        bundle: EvidenceBundle,
+        score: float,
+        score_breakdown: Dict[str, float],
+    ) -> Dict[str, Any]:
+        return {
+            "path": self._path_to_debug(bundle.path),
+            "score": float(score),
+            "score_breakdown": {
+                k: [float(x) for x in v] if isinstance(v, list) else float(v)
+                for k, v in score_breakdown.items()
+            },
+            "supporting_chunk_ids": list(bundle.supporting_chunk_ids),
+            "grounded_hops": [
+                {
+                    "source": gh.hop.source,
+                    "relation": gh.hop.relation,
+                    "is_reverse": bool(getattr(gh.hop, "is_reverse", False)),
+                    "target": gh.hop.target,
+                    "chunk_id": gh.chunk_id,
+                    "support_score": float(gh.support_score),
+                }
+                for gh in bundle.grounded_hops
+            ],
+        }
+
+    def _bundle_start_entities(self, bundle: EvidenceBundle) -> Set[str]:
+        entities: Set[str] = set()
+        for hop in bundle.path.hops:
+            if hop.source.startswith("E:"):
+                entities.add(hop.source)
+            if hop.target.startswith("E:"):
+                entities.add(hop.target)
+        if bundle.path.start_node.startswith("E:"):
+            entities.add(bundle.path.start_node)
+        return entities
+
+    def _select_and_format_deduplicated_contexts(
+        self,
+        selected_bundles: List[Tuple[EvidenceBundle, float, Dict[str, float]]],
+        max_paths_per_chunk: int = 2,
+    ) -> List[Tuple[str, float]]:
+        """
+        Groups selected bundles by their supporting chunks to avoid text redundancy.
+        Returns a list of (formatted_context, max_score_for_that_chunk).
+        """
+        # 1. Group bundles by the set of chunks they reference
+        # We use the chunk_ids as a key to ensure we don't repeat the same text block
+        chunk_to_bundles: Dict[Tuple[str, ...], List[Tuple[EvidenceBundle, float]]] = {}
+
+        for bundle, score, _ in selected_bundles:
+            # We sort the chunk IDs to create a stable key for the text block
+            chunk_key = tuple(sorted(set(bundle.supporting_chunk_ids)))
+            if chunk_key not in chunk_to_bundles:
+                chunk_to_bundles[chunk_key] = []
+            chunk_to_bundles[chunk_key].append((bundle, score))
+
+        final_contexts = []
+
+        for chunk_key, bundles in chunk_to_bundles.items():
+            # Sort bundles within this chunk group by score to pick the best 'headers'
+            bundles.sort(key=lambda x: x[1], reverse=True)
+
+            # Extract the actual text for these chunks
+            chunk_texts = []
+            for cid in chunk_key:
+                text = self.corpus.get_text(cid)
+                if text:
+                    chunk_texts.append(text)
+
+            if not chunk_texts:
+                continue
+
+            # Format the header with the top N paths that led us here
+            path_headers = []
+            for bundle, _ in bundles[:max_paths_per_chunk]:
+                path_headers.append(f"Reason: {self._format_path(bundle.path)}")
+
+            header_str = " | ".join(path_headers)
+            combined_text = "\n\n".join(chunk_texts)
+
+            formatted_entry = f"[{header_str}]\n\n{combined_text}"
+
+            # The score for this context block is the maximum score of its constituent paths
+            max_score = bundles[0][1]
+            final_contexts.append((formatted_entry, max_score))
+
+        # Return sorted by the highest score found in each block
+        return sorted(final_contexts, key=lambda x: x[1], reverse=True)
+
+    def _select_ranked_bundles(
+        self,
+        ranked_bundles: List[Tuple[EvidenceBundle, float, Dict[str, float]]],
+        start_nodes: Set[str],
+        top_k: int,
+    ) -> List[Tuple[EvidenceBundle, float, Dict[str, float]]]:
+        """
+        Select bundles with:
+        1. one bundle per supporting chunk (best only)
+        2. at least one bundle per start entity if possible
+        3. remaining slots filled by score
+        """
+        """
+        Refined selection logic:
+        1. Deduplicate by chunk context, but keep the path with the best Predicate Match.
+        2. Ensure every starting entity is represented in the final context.
+        """
+        # Step 1: Collapse by chunk usage, but keep the highest quality 'Intent' path
+        best_per_chunk: Dict[
+            Tuple[str, ...], Tuple[EvidenceBundle, float, Dict[str, float]]
+        ] = {}
+
+        for item in ranked_bundles:
+            bundle, score, breakdown = item
+            chunk_key = tuple(sorted(set(bundle.supporting_chunk_ids)))
+
+            existing = best_per_chunk.get(chunk_key)
+            if existing is None:
+                best_per_chunk[chunk_key] = item
+            else:
+                # If these paths use the same chunks, keep the one that matches the query intent better
+                if score > existing[1]:
+                    best_per_chunk[chunk_key] = item
+
+        deduped = sorted(
+            best_per_chunk.values(),
+            key=lambda item: (-item[1], self._bundle_signature(item[0])),
+        )
+
+        # Step 2: ensure coverage across start entities
+        selected: List[Tuple[EvidenceBundle, float, Dict[str, float]]] = []
+        selected_signatures: Set[Tuple[Any, ...]] = set()
+        covered_start_nodes: Set[str] = set()
+
+        for start_node in sorted(start_nodes):
+            best_item = None
+            for item in deduped:
+                bundle, score, breakdown = item
+                sig = self._bundle_signature(bundle)
+                if sig in selected_signatures:
+                    continue
+                bundle_entities = self._bundle_start_entities(bundle)
+                if start_node in bundle_entities:
+                    best_item = item
+                    break
+
+            if best_item is not None:
+                bundle, score, breakdown = best_item
+                sig = self._bundle_signature(bundle)
+                selected.append(best_item)
+                selected_signatures.add(sig)
+                covered_start_nodes.add(start_node)
+
+                if len(selected) >= top_k:
+                    return selected
+
+        # Step 3: fill remaining slots by score
+        for item in deduped:
+            bundle, score, breakdown = item
+            sig = self._bundle_signature(bundle)
+            if sig in selected_signatures:
+                continue
+            selected.append(item)
+            selected_signatures.add(sig)
+            if len(selected) >= top_k:
+                break
+
+        return selected
 
     def retrieve_and_generate(self, query: str, **kwargs) -> StrategyResult:
         t0 = time.perf_counter()
@@ -233,142 +393,116 @@ class GraphStrategy(BaseStrategy):
         debug_info: Optional[Dict[str, Any]] = {} if debug else None
 
         try:
-            r0 = time.perf_counter()
             self._ensure_loaded()
-            extracted_norms = self.entity_extractor.extract(query)
-            candidate_nodes = {f"E:{norm}" for norm in extracted_norms}
-            start_nodes = {node for node in candidate_nodes if self._graph.has_node(node)}
-            unmatched_norms = [norm for norm in extracted_norms if f"E:{norm}" not in start_nodes]
-            if unmatched_norms and self.entity_index_store:
-                for norm in unmatched_norms:
-                    for match_norm, score in self.entity_index_store.search(
-                        norm,
-                        top_k=self.entity_vector_top_k,
-                        threshold=self.entity_vector_threshold,
-                    ):
-                        node = f"E:{match_norm}"
-                        if self._graph.has_node(node):
-                            start_nodes.add(node)
-            unmatched_entities = sorted(
-                norm for norm in extracted_norms if f"E:{norm}" not in start_nodes
+            r0 = time.perf_counter()
+
+            # 1. Entity Extraction and Resolution
+            extracted_norms = sorted(set(self.entity_extractor.extract(query)))
+            start_nodes, unmatched_entities, vector_matches = self._resolve_start_nodes(
+                extracted_norms
             )
 
             if debug_info is not None:
-                debug_info["extracted_entities"] = sorted(extracted_norms)
-                debug_info["start_nodes"] = sorted(start_nodes)
-                debug_info["unmatched_entities"] = unmatched_entities
-
-            self._queries_seen += 1
-            if start_nodes:
-                self._queries_with_match += 1
-            match_rate = self._queries_with_match / max(1, self._queries_seen)
-            logger.info(
-                "Graph entity match rate: %.2f%% (%d/%d)",
-                match_rate * 100.0,
-                self._queries_with_match,
-                self._queries_seen,
-            )
+                debug_info.update(
+                    {
+                        "extracted_entities": extracted_norms,
+                        "start_nodes": sorted(start_nodes),
+                        "unmatched_entities": unmatched_entities,
+                        "entity_index_matches": vector_matches,
+                    }
+                )
 
             if not start_nodes:
-                timings["retrieval"] = (time.perf_counter() - r0) * 1000.0
-                timings["total"] = (time.perf_counter() - t0) * 1000.0
-                return StrategyResult(
-                    answer="",
-                    context_scores=[],
-                    latency_ms=timings,
-                    status="NO_CONTEXT",
-                    debug_info=debug_info,
-                )
+                return self._no_context_result(t0, r0, timings, debug_info)
 
-            rel_edges: List[Tuple[str, str, str]] = []
-            expanded_nodes = self._expand_relational_entities(start_nodes, rel_edges=rel_edges)
-            if debug_info is not None:
-                debug_info["expanded_nodes"] = sorted(expanded_nodes)
-                debug_info["rel_edges"] = [
-                    {"source": source, "target": target, "label": label}
-                    for source, target, label in (rel_edges or [])
-                ]
-            chunk_scores: Dict[str, float] = {}
-            chunk_start_support: Dict[str, Set[str]] = {}
-            chunk_to_entities: Dict[str, Set[str]] = {}
-            for entity_node in expanded_nodes:
-                role_weight = (
-                    self.start_entity_weight
-                    if entity_node in start_nodes
-                    else self.expanded_entity_weight
-                )
-                weighted_vote = role_weight * self._entity_df_weight(entity_node)
-                for _, target, data in self._graph.out_edges(entity_node, data=True):
-                    if data.get("kind") != "appears_in":
-                        continue
-                    chunk_id = self._chunk_id_from_node(target)
-                    if not chunk_id:
-                        continue
-                    chunk_scores[chunk_id] = chunk_scores.get(chunk_id, 0.0) + weighted_vote
-                    chunk_to_entities.setdefault(chunk_id, set()).add(entity_node)
-                    if entity_node in start_nodes:
-                        entity_norm = entity_node[2:] if entity_node.startswith("E:") else entity_node
-                        chunk_start_support.setdefault(chunk_id, set()).add(entity_norm)
-
-            if not chunk_scores:
-                timings["retrieval"] = (time.perf_counter() - r0) * 1000.0
-                timings["total"] = (time.perf_counter() - t0) * 1000.0
-                return StrategyResult(
-                    answer="",
-                    context_scores=[],
-                    latency_ms=timings,
-                    status="NO_CONTEXT",
-                    debug_info=debug_info,
-                )
-
-            final_scores: Dict[str, float] = {}
-            for chunk_id, base_score in chunk_scores.items():
-                support_count = len(chunk_start_support.get(chunk_id, set()))
-                final_scores[chunk_id] = base_score + (self.synergy_gamma * support_count)
-
-            ranked_chunks = sorted(
-                final_scores.items(),
-                key=lambda item: (-item[1], item[0]),
+            # 2. Path Enumeration
+            candidate_paths = enumerate_candidate_paths(
+                graph=self._graph,
+                start_nodes=start_nodes,
+                max_hops=self.max_hops,
+                bidirectional=self.bidirectional,
+                max_paths_per_start=self.max_paths_per_start,
             )
-            if debug_info is not None:
-                debug_info["chunk_trace"] = [
-                    {
-                        "chunk_id": chunk_id,
-                        "score": float(score),
-                        "supporting_entities": sorted(chunk_start_support.get(chunk_id, set())),
-                    }
-                    for chunk_id, score in ranked_chunks
-                ]
-            entity_paths = self._get_paths_to_entities(start_nodes, rel_edges)
+
+            # 3. Path Grounding (Finding specific chunks)
+            grounded_bundles: List[EvidenceBundle] = []
+            for path in candidate_paths:
+                bundle = ground_path(path=path, graph=self._graph)
+                if bundle is not None and bundle.grounded_hops:
+                    grounded_bundles.append(bundle)
+
+            if not grounded_bundles:
+                return self._no_context_result(t0, r0, timings, debug_info)
+
+            # 4. Path Scoring
+            score_cache: Dict[Any, Any] = {}
+            scored_bundles: List[Tuple[EvidenceBundle, float, Dict[str, float]]] = []
+            for bundle in grounded_bundles:
+                score, breakdown = score_bundle(
+                    query=query,
+                    bundle=bundle,
+                    graph=self._graph,
+                    embedder=self.embedder,
+                    corpus=self.corpus,
+                    config=self.scoring_config,
+                    cache=score_cache,
+                    debug=debug,
+                )
+                scored_bundles.append((bundle, float(score), breakdown))
+
+            # 5. Ranking and Global Selection
+            ranked_bundles = sorted(
+                scored_bundles,
+                key=lambda item: (-item[1], self._bundle_signature(item[0])),
+            )
+            selected_bundles = self._select_ranked_bundles(
+                ranked_bundles, start_nodes, self.top_k
+            )
+
+            # 6. --- CONTEXT DEDUPLICATION & GROUPING ---
+            # Group by INDIVIDUAL chunk_id to ensure absolute text uniqueness
+            chunk_id_to_bundles: Dict[str, List[Tuple[EvidenceBundle, float]]] = {}
+
+            for bundle, score, _ in selected_bundles:
+                for cid in set(bundle.supporting_chunk_ids):
+                    if cid not in chunk_id_to_bundles:
+                        chunk_id_to_bundles[cid] = []
+                    chunk_id_to_bundles[cid].append((bundle, score))
+
             pairs: List[Tuple[str, float]] = []
-            for chunk_id, score in ranked_chunks:
-                text = self.corpus.get_text(chunk_id)
+            for cid, bundles in chunk_id_to_bundles.items():
+                # Sort bundles by score so the most relevant path is the first 'Reason'
+                bundles.sort(key=lambda x: x[1], reverse=True)
+
+                text = self.corpus.get_text(cid)
                 if not text:
                     continue
-                formatted = self._format_chunk_with_paths(
-                    chunk_id, text, chunk_to_entities, entity_paths
-                )
-                pairs.append((formatted, float(score)))
-                if len(pairs) >= self.top_k:
-                    break
+
+                # Display up to 3 paths to give the LLM full context of why this text is here
+                reasons = [f"Path: {self._format_path(b.path)}" for b, _ in bundles[:3]]
+                header = f"[{' | '.join(reasons)}]"
+
+                pairs.append((f"{header}\n\n{text}", bundles[0][1]))
+
+            # Re-sort groups by score to ensure best evidence is at the top for the LLM
+            pairs.sort(key=lambda x: x[1], reverse=True)
+
+            if debug_info is not None:
+                debug_info["bundle_trace"] = [
+                    self._bundle_to_debug(b, s, d) for b, s, d in selected_bundles
+                ]
 
             timings["retrieval"] = (time.perf_counter() - r0) * 1000.0
-            if not pairs:
-                timings["total"] = (time.perf_counter() - t0) * 1000.0
-                return StrategyResult(
-                    answer="",
-                    context_scores=[],
-                    latency_ms=timings,
-                    status="NO_CONTEXT",
-                    debug_info=debug_info,
-                )
 
+            # 7. Generation
             stage = "generation"
             g0 = time.perf_counter()
-            contexts = [ctx for (ctx, _) in pairs]
-            generation = self.generator.generate(query=query, context=contexts)
+            generation = self.generator.generate(
+                query=query, context=[ctx for ctx, _ in pairs]
+            )
             timings["generation"] = (time.perf_counter() - g0) * 1000.0
             timings["total"] = (time.perf_counter() - t0) * 1000.0
+
             return StrategyResult(
                 answer=generation.text,
                 context_scores=pairs,
@@ -376,15 +510,28 @@ class GraphStrategy(BaseStrategy):
                 status="OK",
                 debug_info=debug_info,
             )
+
         except Exception as exc:
-            timings["total"] = (time.perf_counter() - t0) * 1000.0
-            if debug_info is not None:
-                debug_info["error_stage"] = stage
-            return StrategyResult(
-                answer="",
-                context_scores=[],
-                latency_ms=timings,
-                status="ERROR",
-                error=f"GraphStrategy failed during {stage}: {type(exc).__name__}: {exc}",
-                debug_info=debug_info,
-            )
+            return self._error_result(t0, timings, stage, exc, debug_info)
+
+    def _no_context_result(self, t0, r0, timings, debug_info):
+        timings["retrieval"] = (time.perf_counter() - r0) * 1000.0
+        timings["total"] = (time.perf_counter() - t0) * 1000.0
+        return StrategyResult(
+            answer="",
+            context_scores=[],
+            latency_ms=timings,
+            status="NO_CONTEXT",
+            debug_info=debug_info,
+        )
+
+    def _error_result(self, t0, timings, stage, exc, debug_info):
+        timings["total"] = (time.perf_counter() - t0) * 1000.0
+        return StrategyResult(
+            answer="",
+            context_scores=[],
+            latency_ms=timings,
+            status="ERROR",
+            error=f"GraphStrategy failed during {stage}: {type(exc).__name__}: {exc}",
+            debug_info=debug_info,
+        )

@@ -13,7 +13,7 @@ SOME COMMON PATTERNS:
 - "<role> of <ENTITY>" -> ["<ENTITY>"]
 - "<role> of <WORK_OF_ART> (<details>)" -> ["<WORK_OF_ART>"]
 
-HINT: Entities are usually capitalised. Words like "director", "film", etc. are not usually entities.
+HINT: Entities are usually capitalised and not in brackets. Words like "director", "film", (Film) etc. are not usually entities.
 
 QUESTION:
 {query}

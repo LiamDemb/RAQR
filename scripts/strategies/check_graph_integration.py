@@ -16,6 +16,7 @@ from raqr.graph_store import NetworkXGraphStore
 from raqr.loaders import JsonCorpusLoader
 from raqr.prompts import get_generator_prompt
 from raqr.strategies.graph import GraphStrategy, _default_query_entity_extractor
+from raqr.embedder import SentenceTransformersEmbedder
 
 
 def _check(condition: bool, name: str) -> bool:
@@ -35,10 +36,15 @@ def _build_strategy(output_dir: str, top_k: int, max_hops: int) -> GraphStrategy
             f"Required artifact missing: {alias_map_path}. Rebuild corpus with Phase 1 pipeline."
         )
     alias_resolver = EntityAliasResolver.from_artifacts(output_dir=output_dir)
-    entity_df_by_norm = EntityAliasResolver.load_df_map_from_lexicon(lexicon_path=lexicon_path)
+
     entity_index_store = None
-    if os.path.exists(f"{output_dir}/entity_index.faiss") and os.path.exists(f"{output_dir}/entity_index_meta.parquet"):
-        entity_index_store = EntityIndexStore(f"{output_dir}/entity_index.faiss", f"{output_dir}/entity_index_meta.parquet")
+    if os.path.exists(f"{output_dir}/entity_index.faiss") and os.path.exists(
+        f"{output_dir}/entity_index_meta.parquet"
+    ):
+        entity_index_store = EntityIndexStore(
+            f"{output_dir}/entity_index.faiss",
+            f"{output_dir}/entity_index_meta.parquet",
+        )
     return GraphStrategy(
         graph_store=NetworkXGraphStore(graph_path=graph_path),
         corpus=JsonCorpusLoader(jsonl_path=corpus_path),
@@ -49,8 +55,8 @@ def _build_strategy(output_dir: str, top_k: int, max_hops: int) -> GraphStrategy
         entity_extractor=_default_query_entity_extractor(alias_resolver),
         top_k=top_k,
         max_hops=max_hops,
-        entity_df_by_norm=entity_df_by_norm,
         entity_index_store=entity_index_store,
+        embedder=SentenceTransformersEmbedder(model_name="all-MiniLM-L6-v2"),
     )
 
 
@@ -127,10 +133,14 @@ def main() -> int:
     all_ok &= _check("total" in result.latency_ms, "latency includes total")
     all_ok &= _check("retrieval" in result.latency_ms, "latency includes retrieval")
     if result.status == "OK":
-        all_ok &= _check(len(result.context_scores) > 0, "OK has non-empty context_scores")
+        all_ok &= _check(
+            len(result.context_scores) > 0, "OK has non-empty context_scores"
+        )
         all_ok &= _check(bool(result.answer.strip()), "OK has non-empty answer")
     elif result.status == "NO_CONTEXT":
-        all_ok &= _check(len(result.context_scores) == 0, "NO_CONTEXT has empty context_scores")
+        all_ok &= _check(
+            len(result.context_scores) == 0, "NO_CONTEXT has empty context_scores"
+        )
     else:
         all_ok &= _check(bool(result.error), "ERROR has non-empty error message")
 
@@ -157,4 +167,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

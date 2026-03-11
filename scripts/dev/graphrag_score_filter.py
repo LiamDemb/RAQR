@@ -90,7 +90,9 @@ def main() -> int:
     print("Building GraphRAG strategy...")
     graph = build_graph_strategy(args.output_dir)
     judge = LLMJudge()
-    print(f"Evaluating GraphRAG on {len(samples)} questions (filtering for score={args.score})")
+    print(
+        f"Evaluating GraphRAG on {len(samples)} questions (filtering for score={args.score})"
+    )
     print("=" * 60)
 
     matching_questions: list[str] = []
@@ -116,7 +118,9 @@ def main() -> int:
 
     print()  # newline after progress bar
 
-    print(f"\nQuestions where judge returned score={args.score}: {len(matching_questions)}/{total}")
+    print(
+        f"\nQuestions where judge returned score={args.score}: {len(matching_questions)}/{total}"
+    )
     print("-" * 60)
     for i, q in enumerate(matching_questions, 1):
         print(f"{i}. {q}")

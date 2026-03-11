@@ -95,5 +95,5 @@ collect-ie-batch:
 # Rebuild graph from a corpus file. CORPUS=path GRAPH=path (e.g. corpus.jsonl -> graph.pkl)
 build-graph-from-corpus:
 	poetry run python scripts/corpus/build_graph_from_corpus.py \
-		--corpus "$(CORPUS)" \
-		--graph-out "$(GRAPH)"
+		--corpus "$(OUTPUT_DIR)/corpus.jsonl" \
+		--graph-out "$(OUTPUT_DIR)/graph.pkl"

@@ -85,7 +85,7 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
         *   This helps distinguish “GraphRAG failed due to aliasing/matching” from “Graph reasoning not needed”.
     1.  **Ingestion:** Extract entities + semantic triples \((subject, predicate, object)\) from chunk text using LLM extraction via the Batch API.
     2.  **Storage:** Store a NetworkX **DiGraph** with directed `Entity --predicate--> Entity` semantic edges and `Entity --> Chunk` provenance edges.
-    3.  **Retrieval:** Extract entities from query $\rightarrow$ map to entity nodes $\rightarrow$ traverse outgoing relational edges (1-hop) $\rightarrow$ collect evidence chunks via provenance edges.
+    3.  **Retrieval:** Extract entities from query $\rightarrow$ map to entity nodes $\rightarrow$ traverse outgoing relational edges (1-hop) $\rightarrow$ collect evidence chunks via provenance edges. Candidate hop and path relevance scoring is managed via a configurable `ScoringConfig` (`local_pred_weight`, `bundle_pred_weight`, `length_penalty`).
 
 ### B. TemporalRAG (Metadata Filter, No Temporal KG)
 *   **Ingestion:** Run a regex date extractor over the corpus. Save `year` into the vector store metadata.

@@ -268,12 +268,4 @@ def ingest_nq(
         )
     ]
 
-    if title and budgets.max_pages_per_question > 1:
-        outgoing = wiki.fetch_html(title).outgoing_titles
-        for out_title in outgoing[: budgets.max_outgoing]:
-            if len(docs) >= budgets.max_pages_per_question:
-                break
-            docs.append(
-                _cached_wiki_page(out_title, source, dataset_origin, docstore, wiki)
-            )
     return _dedupe_docs(docs)

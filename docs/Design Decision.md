@@ -84,7 +84,7 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
         - **Edges:**
             - **Semantic Edge:** `Entity --predicate--> Entity` (directed relation from extracted triples).
             - **Provenance Edge:** `Entity --> Chunk` (`appears_in`) to link evidence back to text.
-    3.  **Retrieval:** Extract entities from query (LLM default) $\rightarrow$ map to graph entity nodes (exact match + optional vector similarity) $\rightarrow$ traverse outgoing **relational** edges (1-hop) $\rightarrow$ collect chunks linked via provenance edges from the expanded entity set.
+    3.  **Retrieval:** Extract entities from query (LLM default) $\rightarrow$ map to graph entity nodes (exact match + optional vector similarity) $\rightarrow$ traverse outgoing **relational** edges (1-hop) $\rightarrow$ collect chunks linked via provenance edges from the expanded entity set. Candidate paths are scored using a combination of local structural matching and relational relevance, governed by a `ScoringConfig` (tuning parameters: `local_pred_weight`, `bundle_pred_weight`, `length_penalty`).
 
 ### B. TemporalRAG (Metadata Filter, No Temporal KG)
 

@@ -56,7 +56,9 @@ def test_build_alias_map_deterministic_ordering():
             return {"A": ["zeta", "eta"]}
 
     titles = ["B", "A", "B"]
-    first = build_alias_map_from_redirects(titles=titles, wiki=FakeWiki(), curated_aliases={})
+    first = build_alias_map_from_redirects(
+        titles=titles, wiki=FakeWiki(), curated_aliases={}
+    )
     second = build_alias_map_from_redirects(
         titles=list(reversed(titles)), wiki=FakeWiki(), curated_aliases={}
     )
