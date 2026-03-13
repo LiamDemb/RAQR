@@ -11,7 +11,7 @@ from .infobox_rewrite import is_infobox_table, linearize_infobox_table
 
 def normalize_text_for_extraction(text: str) -> str:
     """
-    Collapse whitespace for NLP extraction (spaCy, REBEL).
+    Collapse whitespace for NLP extraction.
     Stored chunk text remains unchanged; use this only when calling extractors.
     """
     if not text:
@@ -64,11 +64,7 @@ NOISE_LINK_SELECTORS = [
 def _table_to_text(table, max_rows: int = 30, max_cols: int = 8) -> str:
     """Extract table text, handling table > tbody > tr structure."""
     # Get top-level rows only (exclude nested table rows)
-    all_tr = [
-        tr
-        for tr in table.find_all("tr")
-        if tr.find_parent("table") == table
-    ]
+    all_tr = [tr for tr in table.find_all("tr") if tr.find_parent("table") == table]
     rows = []
     for row in all_tr[:max_rows]:
         cells = row.find_all(["th", "td"], recursive=False)[:max_cols]
@@ -126,13 +122,21 @@ def clean_html_to_structured_doc(
             text = node.get_text(" ", strip=True)
             if text:
                 blocks.append(
-                    Block(text=text, section_path=list(current_path), block_type="paragraph")
+                    Block(
+                        text=text,
+                        section_path=list(current_path),
+                        block_type="paragraph",
+                    )
                 )
         elif node.name == "p":
             text = node.get_text(" ", strip=True)
             if text:
                 blocks.append(
-                    Block(text=text, section_path=list(current_path), block_type="paragraph")
+                    Block(
+                        text=text,
+                        section_path=list(current_path),
+                        block_type="paragraph",
+                    )
                 )
         elif node.name in ["ul", "ol"]:
             # Skip lists nested inside tables (infobox plainlists, etc.)
@@ -154,7 +158,9 @@ def clean_html_to_structured_doc(
                 text = _table_to_text(node)
             if text:
                 blocks.append(
-                    Block(text=text, section_path=list(current_path), block_type="table")
+                    Block(
+                        text=text, section_path=list(current_path), block_type="table"
+                    )
                 )
 
     return StructuredDoc(

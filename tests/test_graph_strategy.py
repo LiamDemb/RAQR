@@ -91,5 +91,5 @@ def test_graph_strategy_debug_trace_contains_path_and_bundle_fields():
 
     assert result.status == "OK"
     assert result.debug_info is not None
-    assert "candidate_paths" in result.debug_info
+    assert "start_nodes" in result.debug_info
     assert "bundle_trace" in result.debug_info

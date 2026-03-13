@@ -5,6 +5,7 @@ details used for Phase 1. Update the "Version/Snapshot" and "Checksum"
 fields after downloading the final artifacts.
 
 ## Natural Questions (NQ)
+
 - Canonical source: https://ai.google.com/research/NaturalQuestions/download
 - Mirror (optional): https://huggingface.co/datasets/google-research-datasets/natural_questions
 - License: Apache-2.0 (official repository), CC-BY-SA-3.0 (Hugging Face mirror)
@@ -13,33 +14,10 @@ fields after downloading the final artifacts.
 - Checksum (sha256): TBD
 - Redistribution notes: Check license terms before redistributing processed data.
 
-## ComplexTempQA
-- Canonical source: https://github.com/DataScienceUIBK/ComplexTempQA
-- License: CC0-1.0 (per repository)
-- Version/Snapshot: TBD (record release tag/commit hash/date)
-- Download date: TBD
-- Checksum (sha256): TBD
-- Redistribution notes: Confirm allowed redistribution of processed outputs.
-
-## HotPotQA
-- Canonical source: https://huggingface.co/datasets/hotpotqa/hotpot_qa
-- License: CC-BY-SA-4.0
-- Version/Snapshot: TBD
-- Download date: TBD
-- Redistribution notes: Check license terms before redistributing processed data.
-- Download script: `scripts/datasets/hotpotqa_download.py`
-
 ## 2WikiMultiHopQA
+
 - Canonical source: https://huggingface.co/datasets/framolfese/2WikiMultihopQA
 - Original paper: Ho et al., Constructing A Multi-hop QA Dataset for Comprehensive Evaluation of Reasoning Steps, COLING 2020
 - License: Apache-2.0 (original repo)
 - Download script: `scripts/datasets/twowikimultihop_download.py`
-- Schema: HotPotQA-compatible (supporting_facts.title, supporting_facts.sent_id). Use `--hotpotqa` with the downloaded JSONL to run ingestion.
-
-## WikiWhy
-- Canonical source: https://github.com/matt-seb-ho/WikiWhy
-- License: MIT (per repository)
-- Version/Snapshot: TBD (record release tag/commit hash/date)
-- Download date: TBD
-- Checksum (sha256): TBD
-- Redistribution notes: Confirm allowed redistribution of processed outputs.
+- Schema: supporting_facts.title, supporting_facts.sent_id. Use `--2wiki` with the downloaded JSONL to run ingestion.

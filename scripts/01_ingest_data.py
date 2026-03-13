@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 from dotenv import load_dotenv
-from raqr.data.loaders import load_complextempqa, load_hotpotqa, load_nq, load_wikiwhy
+from raqr.data.loaders import load_2wiki, load_nq
 from raqr.data.schemas import BenchmarkItem, sha256_text
 
 logger = logging.getLogger(__name__)
@@ -38,9 +38,7 @@ def stratified_split(
         dev_count = int(total * dev_ratio)
         test_count = total - train_count - dev_count
         split_map = (
-            ["train"] * train_count
-            + ["dev"] * dev_count
-            + ["test"] * test_count
+            ["train"] * train_count + ["dev"] * dev_count + ["test"] * test_count
         )
         for item, split in zip(ordered, split_map):
             split_items.append(
@@ -108,19 +106,9 @@ def main() -> int:
         help="Path to NQ JSON/JSONL.",
     )
     parser.add_argument(
-        "--complextempqa",
-        default=os.getenv("COMPLEXTEMPQA_PATH"),
-        help="Path to ComplexTempQA JSON/JSONL.",
-    )
-    parser.add_argument(
-        "--wikiwhy",
-        default=os.getenv("WIKIWHY_PATH"),
-        help="Path to WikiWhy CSV.",
-    )
-    parser.add_argument(
-        "--hotpotqa",
-        default=os.getenv("HOTPOTQA_PATH"),
-        help="Path to HotPotQA JSON/JSONL.",
+        "--2wiki",
+        default=os.getenv("2WIKI_PATH"),
+        help="Path to 2WikiMultiHopQA JSON/JSONL.",
     )
     parser.add_argument(
         "--output-dir",
@@ -138,21 +126,17 @@ def main() -> int:
         "--test-ratio", type=float, default=float(os.getenv("TEST_RATIO", "0.1"))
     )
     parser.add_argument("--nq-version", default=os.getenv("NQ_VERSION"))
-    parser.add_argument("--complextempqa-version", default=os.getenv("COMPLEXTEMPQA_VERSION"))
-    parser.add_argument("--wikiwhy-version", default=os.getenv("WIKIWHY_VERSION"))
-    parser.add_argument("--hotpotqa-version", default=os.getenv("HOTPOTQA_VERSION"))
+    parser.add_argument("--2wiki-version", default=os.getenv("2WIKI_VERSION"))
     args = parser.parse_args()
 
     dataset_paths = [
         args.nq,
-        args.complextempqa,
-        args.wikiwhy,
-        args.hotpotqa,
+        args.2wiki,
     ]
     if not any(p and str(p).strip() for p in dataset_paths):
         raise ValueError(
             "Provide at least one dataset path via CLI or env. "
-            "Example: --hotpotqa data/raw/hotpotqa_50.jsonl"
+            "Example: --2wiki data/raw/2wikimultihop_50.jsonl"
         )
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -167,24 +151,10 @@ def main() -> int:
             benchmark_by_source[item.dataset_source].append(item)
         logger.info("Loaded NQ from %s", args.nq)
 
-    if args.complextempqa and str(args.complextempqa).strip():
-        for item in load_complextempqa(
-            args.complextempqa, dataset_version=args.complextempqa_version
-        ):
+    if args.2wiki and str(args.2wiki).strip():
+        for item in load_2wiki(args.2wiki, dataset_version=args.2wiki_version):
             benchmark_by_source[item.dataset_source].append(item)
-        logger.info("Loaded ComplexTempQA from %s", args.complextempqa)
-
-    if args.wikiwhy and str(args.wikiwhy).strip():
-        for item in load_wikiwhy(args.wikiwhy, dataset_version=args.wikiwhy_version):
-            benchmark_by_source[item.dataset_source].append(item)
-        logger.info("Loaded WikiWhy from %s", args.wikiwhy)
-
-    if args.hotpotqa and str(args.hotpotqa).strip():
-        for item in load_hotpotqa(
-            args.hotpotqa, dataset_version=args.hotpotqa_version
-        ):
-            benchmark_by_source[item.dataset_source].append(item)
-        logger.info("Loaded HotPotQA from %s", args.hotpotqa)
+        logger.info("Loaded 2WikiMultiHopQA from %s", args.2wiki)
 
     sources_loaded = sorted(benchmark_by_source.keys())
     logger.info("Datasets included: %s", ", ".join(sources_loaded))

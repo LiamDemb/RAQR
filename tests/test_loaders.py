@@ -1,6 +1,6 @@
 import json
 
-from raqr.data.loaders import load_complextempqa, load_nq, load_wikiwhy
+from raqr.data.loaders import load_nq
 
 
 def test_load_nq_parses_minimal_jsonl(tmp_path):
@@ -72,50 +72,3 @@ def test_load_nq_parses_annotations_dict(tmp_path):
     assert len(items) == 1
     item = items[0]
     assert item.gold_answers == ["Larry Page"]
-
-
-def test_load_complextempqa_parses_json(tmp_path):
-    path = tmp_path / "complextempqa.json"
-    payload = [
-        {
-            "question": "When did Apollo 11 land on the Moon?",
-            "answers": ["1969"],
-            "title": "Apollo 11",
-        }
-    ]
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    items = list(load_complextempqa(str(path), dataset_version="v1", max_rows=5))
-    assert len(items) == 1
-    item = items[0]
-    assert item.dataset_source == "complextempqa"
-    assert item.gold_answers == ["1969"]
-
-
-def test_load_wikiwhy_parses_csv(tmp_path):
-    path = tmp_path / "wikiwhy.csv"
-    path.write_text(
-        "question,answer,context\n"
-        "Why do leaves change color?,Because chlorophyll breaks down,"
-        "Leaves change color when chlorophyll breaks down.\n",
-        encoding="utf-8",
-    )
-    items = list(load_wikiwhy(str(path), dataset_version="v1", max_rows=5))
-    assert len(items) == 1
-    item = items[0]
-    assert item.dataset_source == "wikiwhy"
-    assert item.gold_answers == ["Because chlorophyll breaks down"]
-
-
-def test_load_wikiwhy_parses_jsonl(tmp_path):
-    path = tmp_path / "wikiwhy.jsonl"
-    payload = {
-        "ctx": "Leaves change color when chlorophyll breaks down.",
-        "title": "Leaf color",
-        "question": "Why do leaves change color?",
-        "cause": "Because chlorophyll breaks down.",
-    }
-    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    items = list(load_wikiwhy(str(path), dataset_version="v1", max_rows=5))
-    assert len(items) == 1
-    item = items[0]
-    assert item.dataset_source == "wikiwhy"

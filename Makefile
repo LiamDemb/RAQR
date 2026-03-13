@@ -2,10 +2,8 @@
 
 -include .env
 
-NQ_PATH ?= data/raw/nq_300.jsonl
-COMPLEXTEMPQA_PATH ?= data/raw/complex_tempqa_300.jsonl
-WIKIWHY_PATH ?= data/raw/wikiwhy_300.jsonl
-HOTPOTQA_PATH ?= data/raw/hotpotqa_300.jsonl
+NQ_PATH ?= data/raw/nq_100.jsonl
+2WIKI_PATH ?= data/raw/2wikimultihop_100.jsonl
 BENCHMARK_PATH ?= data/processed/benchmark.jsonl
 OUTPUT_DIR ?= data/processed
 HF_HOME ?= $(OUTPUT_DIR)/hf_cache
@@ -26,9 +24,7 @@ test:
 ingest:
 	poetry run python scripts/01_ingest_data.py \
 		--nq "$(NQ_PATH)" \
-		--complextempqa "$(COMPLEXTEMPQA_PATH)" \
-		--wikiwhy "$(WIKIWHY_PATH)" \
-		--hotpotqa "$(HOTPOTQA_PATH)" \
+		--2wiki "$(2WIKI_PATH)" \
 		--output-dir "$(OUTPUT_DIR)"
 
 # Build corpus: ingestion + chunking + LLM information extraction (entities+triples) via Batch API.
@@ -36,18 +32,14 @@ build-corpus:
 	poetry run python scripts/01_build_corpus.py \
 		--benchmark "$(BENCHMARK_PATH)" \
 		--nq "$(NQ_PATH)" \
-		--complextempqa "$(COMPLEXTEMPQA_PATH)" \
-		--wikiwhy "$(WIKIWHY_PATH)" \
-		--hotpotqa "$(HOTPOTQA_PATH)" \
+		--2wiki "$(2WIKI_PATH)" \
 		--output-dir "$(OUTPUT_DIR)"
 
 build-corpus-simple:
 	HF_HOME="$(HF_HOME)" poetry run python scripts/01_build_corpus.py \
 		--benchmark "$(BENCHMARK_PATH)" \
 		--nq "$(NQ_PATH)" \
-		--complextempqa "$(COMPLEXTEMPQA_PATH)" \
-		--wikiwhy "$(WIKIWHY_PATH)" \
-		--hotpotqa "$(HOTPOTQA_PATH)" \
+		--2wiki "$(2WIKI_PATH)" \
 		--output-dir "$(OUTPUT_DIR)" \
 		--max-pages 3 \
 		--max-hops 1 \

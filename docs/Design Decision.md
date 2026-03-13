@@ -20,8 +20,7 @@ The Heuristic Router is implemented as a **Priority Cascade**. It evaluates rule
 _Implement these exact logic gates in `src/routers/heuristic.py`._
 
 | Priority | Check Type | Condition (Pseudocode)                                                               | Route To      | Rationale                                                         |
-| :------- | :--------- | :----------------------------------------------------------------------------------- | :------------ | :---------------------------------------------------------------- | ---------------- | -------------------------- |
-| **1**    | Regex      | `matches(query, r\"(from                                                             | between       | in) \\d{4}\")`OR`contains(query, \"timeline\", \"history of\")`   | **Temporal RAG** | Explicit date constraints. |
+| :------- | :--------- | :----------------------------------------------------------------------------------- | :------------ | :---------------------------------------------------------------- |
 | **2**    | Regex      | `contains(query, \"connection between\", \"relationship\", \"how does X affect Y\")` | **Graph RAG** | Multi-hop reasoning intent.                                       |
 | **3**    | Signal     | `Probe.skewness < 0.5` AND `Probe.max_score > 0.65`                                  | **Graph RAG** | Flat distribution implies multiple relevant entities (multi-hop). |
 | **4**    | Fallback   | `True`                                                                               | **Dense RAG** | Standard factual lookup.                                          |
@@ -58,7 +57,7 @@ The Lightweight Classifier must process distinct **feature families**: **Q-Emb**
 
 **Q-Emb:** DistilBERT [CLS] embedding (768 dims).
 
-**Q-Feat:** Engineered query features—length/token count, entity density (spaCy NER), complexity keywords; optional syntax depth.
+**Q-Feat:** Engineered query features—length/token count, entity density, complexity keywords; optional syntax depth.
 
 **Probe:** Top-10 Dense retrieval signals. The Probe runs a standard Dense retrieval (top-k=10). We extract signals from the resulting `scores` list (cosine similarity):
 
@@ -86,13 +85,6 @@ To keep the scope manageable, we will implement "Minimum Viable Versions" of the
             - **Provenance Edge:** `Entity --> Chunk` (`appears_in`) to link evidence back to text.
     3.  **Retrieval:** Extract entities from query (LLM default) $\rightarrow$ map to graph entity nodes (exact match + optional vector similarity) $\rightarrow$ traverse outgoing **relational** edges (1-hop) $\rightarrow$ collect chunks linked via provenance edges from the expanded entity set. Candidate paths are scored using a combination of local structural matching and relational relevance, governed by a `ScoringConfig` (tuning parameters: `local_pred_weight`, `bundle_pred_weight`, `length_penalty`).
 
-### B. TemporalRAG (Metadata Filter, No Temporal KG)
-
-- **Ingestion:** Run a regex date extractor over the corpus. Save `year` into the vector store metadata.
-- **Retrieval:**
-    1.  Extract year range from query (e.g., "2019-2021").
-    2.  Retrieve top-N from FAISS (N≫k), then filter by `year_min/year_max` metadata and refill until k contexts.
-
 ## 5. The "Oracle" Labeling Logic
 
 When generating training data, we must decide which strategy is "Correct."
@@ -105,8 +97,7 @@ We define a **Simplicity Hierarchy** (Cheapest to Most Expensive). We only upgra
 ### Hierarchy (Ranked 0 to 2)
 
 0.  **Dense RAG** (Baseline)
-1.  **Temporal RAG** (Filter is cheap)
-2.  **Graph RAG** (Most expensive/complex)
+1.  **Graph RAG** (Most expensive/complex)
 
 ### Selection Algorithm
 
@@ -115,7 +106,7 @@ def select_gold_label(results: Dict[str, float]) -> str:
     # results = {'Dense': 0.80, 'Graph': 0.84, ...}
 
     # 1. Sort strategies by Simplicity Rank (0 to 2)
-    sorted_strategies = ['Dense', 'Temporal', 'Graph']
+    sorted_strategies = ['Dense', 'Graph']
 
     best_strategy = 'Dense'
     best_score = results['Dense']
