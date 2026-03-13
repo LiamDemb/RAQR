@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
-# Generator prompt (used by DenseStrategy, GraphStrategy, TemporalStrategy, etc.)
+# Generator prompt (used by DenseStrategy and GraphStrategy)
 # ---------------------------------------------------------------------------
 
 BASE_PROMPT_OLD = (

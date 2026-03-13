@@ -1,7 +1,7 @@
 """One-pass LLM extraction: entities + triples in a single call.
 
 Uses OpenAI Chat API with tool calling to extract both entity inventory and
-relational triples from chunk text. The LLM is the sole authority; no spaCy/REBEL.
+relational triples from chunk text. The LLM is the sole authority.
 Post-processing uses normalize_key() only (no alias canonicalization) for
 duplicate-entity-node graph representation.
 """
@@ -35,8 +35,14 @@ _EXTRACT_ONEPASS_TOOL = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "surface": {"type": "string", "description": "Entity as mentioned in text"},
-                            "type": {"type": "string", "description": "PERSON, ORG, GPE, LOC, EVENT, WORK_OF_ART, NOUN_CHUNK"},
+                            "surface": {
+                                "type": "string",
+                                "description": "Entity as mentioned in text",
+                            },
+                            "type": {
+                                "type": "string",
+                                "description": "PERSON, ORG, GPE, LOC, EVENT, WORK_OF_ART, NOUN_CHUNK",
+                            },
                         },
                         "required": ["surface", "type"],
                     },
@@ -91,7 +97,15 @@ def _post_process_onepass(
     Ensures all triple endpoints exist in the entity list.
     """
     entity_by_norm: Dict[str, Dict[str, Any]] = {}
-    banned_predicates = {"is", "was", "has", "had", "mentions", "discusses", "related_to"}
+    banned_predicates = {
+        "is",
+        "was",
+        "has",
+        "had",
+        "mentions",
+        "discusses",
+        "related_to",
+    }
 
     for e in raw_entities or []:
         surface = (e.get("surface") or "").strip()
@@ -198,6 +212,7 @@ class LLMOnepassExtractor:
             self.max_tokens = int(os.getenv("LLM_IE_MAX_TOKENS", "2048"))
         if not self.prompt_template:
             from raqr.prompts import get_onepass_extraction_prompt
+
             self.prompt_template = get_onepass_extraction_prompt()
 
     def _get_client(self) -> OpenAI:
@@ -221,7 +236,9 @@ class LLMOnepassExtractor:
             return [], []
 
         seed_list = seed_titles_in_chunk or []
-        seed_str = "\n".join(f"- {s}" for s in seed_list) if seed_list else "(none detected)"
+        seed_str = (
+            "\n".join(f"- {s}" for s in seed_list) if seed_list else "(none detected)"
+        )
 
         prompt = self.prompt_template.format(
             title=title,
@@ -234,7 +251,10 @@ class LLMOnepassExtractor:
             model=self.model_id,
             messages=[{"role": "user", "content": prompt}],
             tools=[_EXTRACT_ONEPASS_TOOL],
-            tool_choice={"type": "function", "function": {"name": "extract_entities_and_triples"}},
+            tool_choice={
+                "type": "function",
+                "function": {"name": "extract_entities_and_triples"},
+            },
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )
@@ -268,13 +288,24 @@ def build_onepass_chat_request(
 ) -> Dict[str, Any]:
     """Build body dict for /v1/chat/completions used by Batch API."""
     model_id = model_id or os.getenv("LLM_IE_MODEL", "gpt-4o-mini")
-    temperature = temperature if temperature is not None else float(os.getenv("LLM_IE_TEMPERATURE", "0"))
-    max_tokens = max_tokens if max_tokens is not None else int(os.getenv("LLM_IE_MAX_TOKENS", "2048"))
+    temperature = (
+        temperature
+        if temperature is not None
+        else float(os.getenv("LLM_IE_TEMPERATURE", "0"))
+    )
+    max_tokens = (
+        max_tokens
+        if max_tokens is not None
+        else int(os.getenv("LLM_IE_MAX_TOKENS", "2048"))
+    )
     return {
         "model": model_id,
         "messages": [{"role": "user", "content": prompt}],
         "tools": [_EXTRACT_ONEPASS_TOOL],
-        "tool_choice": {"type": "function", "function": {"name": "extract_entities_and_triples"}},
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": "extract_entities_and_triples"},
+        },
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
@@ -290,7 +321,9 @@ def build_onepass_batch_line(custom_id: str, body: Dict[str, Any]) -> Dict[str, 
     }
 
 
-def parse_onepass_batch_output_line(line: Dict[str, Any]) -> tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
+def parse_onepass_batch_output_line(
+    line: Dict[str, Any],
+) -> tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Parse a Batch API output line into (custom_id, entities, relations)."""
     custom_id = line.get("custom_id") or ""
     raw_entities: List[Dict[str, Any]] = []
@@ -320,6 +353,8 @@ def parse_onepass_batch_output_line(line: Dict[str, Any]) -> tuple[str, List[Dic
             raw_entities.extend(args.get("entities", []))
             raw_triples.extend(args.get("triples", []))
         except json.JSONDecodeError as e:
-            logger.warning("Failed to parse onepass batch output for %s: %s", custom_id, e)
+            logger.warning(
+                "Failed to parse onepass batch output for %s: %s", custom_id, e
+            )
 
     return (custom_id, raw_entities, raw_triples)

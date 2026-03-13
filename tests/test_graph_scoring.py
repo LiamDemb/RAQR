@@ -1,7 +1,7 @@
 from raqr.data.build_graph import build_graph
 from raqr.graph_scoring import score_bundle
 from raqr.graph_types import EvidenceBundle, GraphHop, GraphPath, GroundedHop
-
+from raqr.scoring_config import ScoringConfig
 
 class TinyEmbedder:
     def __init__(self, vectors):
@@ -49,11 +49,11 @@ def test_score_bundle_prefers_relation_semantically_closer_to_query():
     )
     embedder = TinyEmbedder(
         {
-            "director death question": [1.0, 0.0, 0.0],
-            "directed_by": [1.0, 0.0, 0.0],
+            "query::director death question": [1.0, 0.0, 0.0],
+            "directed by": [1.0, 0.0, 0.0],
             "country": [0.0, 1.0, 0.0],
-            "The film was directed by John Smith.": [1.0, 0.0, 0.0],
-            "The country of origin is France.": [0.0, 1.0, 0.0],
+            "film directed by person": [1.0, 0.0, 0.0],
+            "film country usa": [0.0, 1.0, 0.0],
         }
     )
 
@@ -66,13 +66,15 @@ def test_score_bundle_prefers_relation_semantically_closer_to_query():
         chunk_ids=["c2"],
     )
 
+    config = ScoringConfig(length_penalty=0.75)
+
     better_score, _ = score_bundle(
         query="director death question",
         bundle=better,
         graph=graph,
         corpus=corpus,
         embedder=embedder,
-        length_penalty=0.75,
+        config=config,
         cache={},
     )
     worse_score, _ = score_bundle(
@@ -81,7 +83,7 @@ def test_score_bundle_prefers_relation_semantically_closer_to_query():
         graph=graph,
         corpus=corpus,
         embedder=embedder,
-        length_penalty=0.75,
+        config=config,
         cache={},
     )
 
@@ -98,10 +100,10 @@ def test_score_bundle_penalizes_longer_paths_when_relation_relevance_is_equal():
     )
     embedder = TinyEmbedder(
         {
-            "same query": [1.0, 0.0, 0.0],
+            "query::same query": [1.0, 0.0, 0.0],
             "r": [1.0, 0.0, 0.0],
-            "The film was directed by John Smith.": [1.0, 0.0, 0.0],
-            "John Smith died in 1970.": [1.0, 0.0, 0.0],
+            "a r b": [1.0, 0.0, 0.0],
+            "b r c": [1.0, 0.0, 0.0],
         }
     )
 
@@ -115,13 +117,15 @@ def test_score_bundle_penalizes_longer_paths_when_relation_relevance_is_equal():
         chunk_ids=["c1", "c2"],
     )
 
+    config = ScoringConfig(length_penalty=-0.75)
+
     short_score, _ = score_bundle(
         query="same query",
         bundle=short_bundle,
         graph=graph,
         corpus=corpus,
         embedder=embedder,
-        length_penalty=0.75,
+        config=config,
         cache={},
     )
     long_score, _ = score_bundle(
@@ -130,7 +134,7 @@ def test_score_bundle_penalizes_longer_paths_when_relation_relevance_is_equal():
         graph=graph,
         corpus=corpus,
         embedder=embedder,
-        length_penalty=0.75,
+        config=config,
         cache={},
     )
 
@@ -142,9 +146,9 @@ def test_score_bundle_returns_breakdown_with_expected_keys():
     corpus = CorpusStub({"c1": "The film was directed by John Smith."})
     embedder = TinyEmbedder(
         {
-            "query": [1.0, 0.0, 0.0],
-            "directed_by": [1.0, 0.0, 0.0],
-            "The film was directed by John Smith.": [1.0, 0.0, 0.0],
+            "query::query": [1.0, 0.0, 0.0],
+            "directed by": [1.0, 0.0, 0.0],
+            "film directed by person": [1.0, 0.0, 0.0],
         }
     )
     bundle = _bundle(
@@ -152,16 +156,21 @@ def test_score_bundle_returns_breakdown_with_expected_keys():
         chunk_ids=["c1"],
     )
 
+    config = ScoringConfig(length_penalty=0.75)
+
     score, breakdown = score_bundle(
         query="query",
         bundle=bundle,
         graph=graph,
         corpus=corpus,
         embedder=embedder,
-        length_penalty=0.75,
+        config=config,
         cache={},
     )
 
     assert isinstance(score, float)
-    assert "s_rel" in breakdown
+    assert "s_pred" in breakdown
     assert "s_len" in breakdown
+    assert "s_triple" in breakdown
+    assert "hop_scores" in breakdown
+

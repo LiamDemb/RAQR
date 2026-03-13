@@ -15,20 +15,24 @@ from dotenv import load_dotenv
 from raqr.data.build_entity_index import build_entity_index
 from raqr.data.build_faiss import build_faiss_index
 from raqr.data.build_graph import build_graph
-from raqr.data.alias_map import CURATED_ALIASES, build_alias_map_from_redirects, normalize_alias_map
-from raqr.data.canonical_clean import clean_html_to_structured_doc, normalize_text_for_extraction
+from raqr.data.alias_map import (
+    CURATED_ALIASES,
+    build_alias_map_from_redirects,
+    normalize_alias_map,
+)
+from raqr.data.canonical_clean import (
+    clean_html_to_structured_doc,
+    normalize_text_for_extraction,
+)
 from raqr.data.chunking import chunk_blocks
 from raqr.data.corpus_acquisition import (
     Budgets,
-    ingest_complextempqa,
-    ingest_hotpotqa,
+    ingest_2wiki,
     ingest_nq,
-    ingest_wikiwhy,
 )
 from raqr.data.corpus_schemas import CorpusChunk
 from raqr.data.docstore import DocStore
 from raqr.data.wiki_title_matcher import build_wiki_title_matcher, write_wiki_titles
-from raqr.data.enrich_years import aggregate_year_fields, extract_years
 from raqr.data.entity_lexicon import build_entity_lexicon
 from raqr.data.quality_gates import run_quality_gates
 from raqr.data.schemas import sha256_text
@@ -63,7 +67,9 @@ def _question_text_from_row(row: dict, source: str) -> str | None:
         return (
             row.get("question_text")
             or row.get("questionText")
-            or (question_block.get("text") if isinstance(question_block, dict) else None)
+            or (
+                question_block.get("text") if isinstance(question_block, dict) else None
+            )
             or (question_block if isinstance(question_block, str) else None)
         )
     return row.get("question") or row.get("query")
@@ -99,55 +105,14 @@ def _build_samples(
                 }
             )
 
-    complextempqa_path = paths_by_source.get("complextempqa")
-    if complextempqa_path:
-        for row in _iter_jsonl(complextempqa_path):
-            question = _question_text_from_row(row, "complextempqa")
+    twowiki_path = paths_by_source.get("2wiki")
+    if twowiki_path:
+        for row in _iter_jsonl(twowiki_path):
+            question = _question_text_from_row(row, "2wiki")
             if not question:
                 continue
             qid = sha256_text(question)
-            bench = benchmark_by_source.get("complextempqa", {}).get(qid)
-            if not bench:
-                continue
-            row_sample = {
-                "source": "complextempqa",
-                "question_id": qid,
-                "question": question,
-                "gold_answers": bench.get("gold_answers", []),
-                "question_entity": row.get("question_entity"),
-                "answer_entity": row.get("answer_entity"),
-                "question_country_entity": row.get("question_country_entity"),
-            }
-            samples.append(row_sample)
-
-    wikiwhy_path = paths_by_source.get("wikiwhy")
-    if wikiwhy_path:
-        for row in _iter_jsonl(wikiwhy_path):
-            question = _question_text_from_row(row, "wikiwhy")
-            if not question:
-                continue
-            qid = sha256_text(question)
-            bench = benchmark_by_source.get("wikiwhy", {}).get(qid)
-            if not bench:
-                continue
-            samples.append(
-                {
-                    "source": "wikiwhy",
-                    "question_id": qid,
-                    "question": question,
-                    "gold_answers": bench.get("gold_answers", []),
-                    "title": row.get("title"),
-                }
-            )
-
-    hotpotqa_path = paths_by_source.get("hotpotqa")
-    if hotpotqa_path:
-        for row in _iter_jsonl(hotpotqa_path):
-            question = _question_text_from_row(row, "hotpotqa")
-            if not question:
-                continue
-            qid = sha256_text(question)
-            bench = benchmark_by_source.get("hotpotqa", {}).get(qid)
+            bench = benchmark_by_source.get("2wiki", {}).get(qid)
             if not bench:
                 continue
             supporting_facts = row.get("supporting_facts") or {}
@@ -155,7 +120,7 @@ def _build_samples(
                 continue
             samples.append(
                 {
-                    "source": "hotpotqa",
+                    "source": "2wiki",
                     "question_id": qid,
                     "question": question,
                     "gold_answers": bench.get("gold_answers", []),
@@ -178,16 +143,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build unified corpus + indexes.")
     parser.add_argument("--benchmark", default=os.getenv("BENCHMARK_PATH"))
     parser.add_argument("--nq", default=os.getenv("NQ_PATH"))
-    parser.add_argument("--complextempqa", default=os.getenv("COMPLEXTEMPQA_PATH"))
-    parser.add_argument("--wikiwhy", default=os.getenv("WIKIWHY_PATH"))
-    parser.add_argument("--hotpotqa", default=os.getenv("HOTPOTQA_PATH"))
-    parser.add_argument("--output-dir", default=os.getenv("OUTPUT_DIR", "data/processed"))
+    parser.add_argument("--2wiki", default=os.getenv("2WIKI_PATH"))
+    parser.add_argument(
+        "--output-dir", default=os.getenv("OUTPUT_DIR", "data/processed")
+    )
     parser.add_argument(
         "--docstore",
         default=os.getenv("DOCSTORE_PATH", "data/processed/docstore.sqlite"),
     )
-    parser.add_argument("--model-name", default=os.getenv("MODEL_NAME", "all-MiniLM-L6-v2"))
-    parser.add_argument("--max-pages", type=int, default=int(os.getenv("MAX_PAGES", "12")))
+    parser.add_argument(
+        "--model-name", default=os.getenv("MODEL_NAME", "all-MiniLM-L6-v2")
+    )
+    parser.add_argument(
+        "--max-pages", type=int, default=int(os.getenv("MAX_PAGES", "12"))
+    )
     parser.add_argument("--max-hops", type=int, default=int(os.getenv("MAX_HOPS", "2")))
     parser.add_argument(
         "--max-list-pages", type=int, default=int(os.getenv("MAX_LIST_PAGES", "2"))
@@ -215,7 +184,9 @@ def main() -> int:
     args = parser.parse_args()
 
     if not args.benchmark or not str(args.benchmark).strip():
-        raise ValueError("BENCHMARK_PATH is required. Provide --benchmark or set BENCHMARK_PATH.")
+        raise ValueError(
+            "BENCHMARK_PATH is required. Provide --benchmark or set BENCHMARK_PATH."
+        )
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     output_dir = Path(args.output_dir)
@@ -226,9 +197,7 @@ def main() -> int:
 
     path_env_map = {
         "nq": ("NQ_PATH", args.nq),
-        "complextempqa": ("COMPLEXTEMPQA_PATH", args.complextempqa),
-        "wikiwhy": ("WIKIWHY_PATH", args.wikiwhy),
-        "hotpotqa": ("HOTPOTQA_PATH", args.hotpotqa),
+        "2wiki": ("2WIKI_PATH", args.2wiki),
     }
     paths_by_source: Dict[str, str] = {}
     missing = []
@@ -245,7 +214,9 @@ def main() -> int:
             f"for: {', '.join(missing)}. Provide the corresponding paths via CLI or env."
         )
 
-    logger.info("Building corpus from datasets: %s", ", ".join(sorted(paths_by_source.keys())))
+    logger.info(
+        "Building corpus from datasets: %s", ", ".join(sorted(paths_by_source.keys()))
+    )
 
     samples = _build_samples(benchmark_by_source, paths_by_source)
 
@@ -261,12 +232,8 @@ def main() -> int:
 
     all_docs = {}
     for sample in samples:
-        if sample["source"] == "complextempqa":
-            docs = ingest_complextempqa(sample, budgets, docstore, wiki, wikidata)
-        elif sample["source"] == "wikiwhy":
-            docs = ingest_wikiwhy(sample, budgets, docstore, wiki)
-        elif sample["source"] == "hotpotqa":
-            docs = ingest_hotpotqa(sample, budgets, docstore, wiki)
+        if sample["source"] == "2wiki":
+            docs = ingest_2wiki(sample, budgets, docstore, wiki)
         else:
             docs = ingest_nq(sample, budgets, docstore, wiki)
         for doc in docs:
@@ -292,7 +259,9 @@ def main() -> int:
     try:
         matcher = build_wiki_title_matcher(wiki_titles, alias_map=alias_map_redirects)
     except ImportError:
-        logger.warning("FlashText not installed; seed titles will be empty for IE extraction.")
+        logger.warning(
+            "FlashText not installed; seed titles will be empty for IE extraction."
+        )
 
     chunks: List[dict] = []
     chunk_texts: List[str] = []
@@ -319,8 +288,6 @@ def main() -> int:
                 overlap_tokens=args.chunk_overlap_tokens,
             )
         ):
-            years = extract_years(piece.text)
-            year_fields = aggregate_year_fields(years, piece.text, piece.token_count)
             text_for_extraction = normalize_text_for_extraction(piece.text)
             entities: List[dict] = []
             relations: List[dict] = []
@@ -328,10 +295,6 @@ def main() -> int:
                 "dataset_origin": structured.dataset_origin,
                 "page_id": structured.page_id,
                 "revision_id": structured.revision_id,
-                "years": year_fields["years"],
-                "year_min": year_fields["year_min"],
-                "year_max": year_fields["year_max"],
-                "temporal_density": year_fields["temporal_density"],
                 "entities": entities,
                 "anchors": structured.anchors,
             }
@@ -359,13 +322,24 @@ def main() -> int:
     script_dir = Path(__file__).resolve().parent
     ie_script = script_dir / "corpus" / "run_llm_ie_batch.py"
     if ie_script.is_file():
-        logger.info("Running LLM information extraction batch (submit -> wait -> collect -> replace corpus)...")
+        logger.info(
+            "Running LLM information extraction batch (submit -> wait -> collect -> replace corpus)..."
+        )
         result = subprocess.run(
-            [sys.executable, str(ie_script), "--corpus", str(corpus_path), "--output-dir", str(output_dir)],
+            [
+                sys.executable,
+                str(ie_script),
+                "--corpus",
+                str(corpus_path),
+                "--output-dir",
+                str(output_dir),
+            ],
             cwd=str(script_dir.parent),
         )
         if result.returncode != 0:
-            logger.error("IE batch pipeline failed with exit code %d", result.returncode)
+            logger.error(
+                "IE batch pipeline failed with exit code %d", result.returncode
+            )
             return result.returncode
         chunks = list(_iter_jsonl(str(corpus_path)))
     else:

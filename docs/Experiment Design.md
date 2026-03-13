@@ -10,8 +10,7 @@
 To ensure the system encounters diverse reasoning requirements, we construct a unified evaluation dataset merging samples from three sources:
 
 - **Natural Questions (NQ):** Factual/Lookup queries (Target: Dense RAG).
-- **ComplexTempQA:** Temporal/Chronological queries (Target: Temporal RAG).
-- **WikiWhy:** Causal/Explanation queries (Target: GraphRAG).
+- **2WikiMultiHopQA (2WIKI):** Causal/Explanation queries (Target: GraphRAG).
 
 _Total Target Size: ~750–1,500 balanced samples._
 
@@ -21,7 +20,6 @@ The system routes queries to one of three distinct retrieval pipelines. These ac
 
 1.  **Dense RAG:** (Baseline) Vector search (`all-MiniLM-L6-v2`) + Chunk retrieval.
 2.  **GraphRAG:** Relation-aware traversal (Subject-Predicate-Object triples) (NetworkX) for multi-hop reasoning.
-3.  **Temporal RAG:** Metadata-filtered dense retrieval (vector search + year filter); no separate temporal Knowledge Graph.
 
 ### Label Generation Logic (The Oracle)
 
@@ -32,7 +30,7 @@ To generate training data, every question is processed by all 3 strategies. The 
 Let:
 
 - \(S*{dense}\), \(S*{temp}\), \(S\_{graph}\) be the evaluation score for each strategy on that question. We use **LLM-as-judge** (0/1/2 scale: 0 = incorrect, 1 = partial, 2 = correct) rather than token-F1/EM, since answer formats vary and semantic comparison is more reliable.
-- Complexity order: **Dense (simplest)** < **Temporal** < **Graph (most complex)**.
+- Complexity order: **Dense (simplest)** < **Graph (most complex)**.
 - A margin threshold \(\delta \ge 0\).
 - A small tolerance \(\varepsilon\) for floating comparisons (e.g., \(10^{-6}\)).
 
@@ -40,11 +38,7 @@ Let:
 
 1.  **Compute the best-scoring strategy:** \(\text{best} = \arg\max S\_\*\).
 2.  **Decide whether to “pay for complexity”:**
-    - If \(\text{best} = \textbf{Dense}\): choose **Dense**.
-    - If \(\text{best} = \textbf{Temporal}\): choose **Temporal** only if \(S*{temp} \ge S*{dense} + \delta\); otherwise choose **Dense**.
-    - If \(\text{best} = \textbf{Graph}\): choose **Graph** only if \(S*{graph} \ge S*{dense} + \delta\) and (optionally, but used here for cleanliness) \(S*{graph} \ge S*{temp} + \delta\); otherwise fall back to the simplest strategy whose score is within \(\delta\) of \(S\_{graph}\).
-3.  **Deterministic tie-break (exact ties / within tolerance):**
-    - If multiple strategies are effectively tied (within \(\varepsilon\)), break ties deterministically: **Dense > Temporal > Graph**.
+    - If multiple strategies are effectively tied (within \(\varepsilon\)), break ties deterministically: **Dense > Graph**.
 
 This produces labels that encode the deployment goal: **do not spend complexity for tiny gains**.
 
@@ -151,7 +145,6 @@ Stage 2 compares **Heuristic vs Classifier vs LLM** using the winning input set 
 For RQ3 (impact of routing errors), we also run **monolithic baselines**:
 
 - **Always-Dense:** Route every query to Dense RAG.
-- **Always-Temporal:** Route every query to Temporal RAG.
 - **Always-Graph:** Route every query to Graph RAG.
 
 These establish performance floors and allow **routing regret** analysis.
@@ -179,7 +172,7 @@ We perform a 3x3 ablation study. Each cell represents a distinct experiment scri
 1.  **Routing Accuracy:** % of times the router picked the "Gold Label" strategy.
 2.  **Downstream Performance:** F1 Score / Exact Match of the final answer produced by the routed strategy.
 3.  **Efficiency:** Inference latency (ms) and cost per 1k queries.
-4.  **Routing Macro Metrics:** Macro-F1 (or balanced accuracy) and per-class precision/recall for routing (ensures Graph/Temporal performance is visible under label imbalance).
+4.  **Routing Macro Metrics:** Macro-F1 (or balanced accuracy) and per-class precision/recall for routing (ensures Graph performance is visible under label imbalance).
 5.  **Optional Utility Score:** A simple cost-aware summary, e.g. \(U = \text{DownstreamF1} - \lambda \cdot \text{end_to_end_latency_ms}\) (or cost), reported alongside raw metrics.
 6.  **Graph Diagnostic (Match Rate):** “% of queries with \(\ge 1\) entity match in the graph” (after entity normalization). This is not a primary metric, but it helps interpret when GraphRAG underperforms due to surface-form mismatch rather than reasoning.
 

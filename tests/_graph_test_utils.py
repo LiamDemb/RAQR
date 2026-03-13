@@ -155,13 +155,19 @@ def comparison_corpus() -> dict[str, str]:
 def strategy_embedder() -> TinyEmbedder:
     return TinyEmbedder(
         {
-            "How is A related to B?": [1.0, 0.0, 0.0],
-            "How is A related to C?": [1.0, 0.0, 0.0],
-            "Unknown entity query": [1.0, 0.0, 0.0],
-            "Which film has the director who died later, Valentin the Good or A Daughter of Two Worlds?": [1.0, 0.0, 0.0],
+            "query::How is A related to B?": [1.0, 0.0, 0.0],
+            "query::How is A related to C?": [1.0, 0.0, 0.0],
+            "query::Unknown entity query": [1.0, 0.0, 0.0],
+            "query::Which film has the director who died later, Valentin the Good or A Daughter of Two Worlds?": [1.0, 0.0, 0.0],
             "causes": [1.0, 0.0, 0.0],
-            "directed_by": [1.0, 0.0, 0.0],
-            "died_on": [1.0, 0.0, 0.0],
+            "a causes b": [1.0, 0.0, 0.0],
+            "b causes c": [1.0, 0.0, 0.0],
+            "directed by": [1.0, 0.0, 0.0],
+            "died on": [1.0, 0.0, 0.0],
+            "a daughter of two worlds directed by james young": [1.0, 0.0, 0.0],
+            "james young died on date_1948": [1.0, 0.0, 0.0],
+            "valentin the good directed by martin fric": [1.0, 0.0, 0.0],
+            "martin fric died on date_1968": [1.0, 0.0, 0.0],
             "country": [0.0, 1.0, 0.0],
             "r": [1.0, 0.0, 0.0],
         }

@@ -50,32 +50,6 @@ def _has_context_nq(row: Dict[str, Any]) -> bool:
     return False
 
 
-def _has_context_complextempqa(row: Dict[str, Any]) -> bool:
-    """Check if row has context from any ComplexTempQA-style field."""
-    if _first_non_empty(
-        row.get("context"),
-        row.get("passage"),
-        row.get("document") if isinstance(row.get("document"), str) else None,
-        row.get("paragraph"),
-    ):
-        return True
-    if row.get("question") and (row.get("answers") or row.get("answer")):
-        return True
-    return False
-
-
-def _has_context_wikiwhy(row: Dict[str, Any]) -> bool:
-    """Check if row has context from any WikiWhy-style field."""
-    return bool(
-        _first_non_empty(
-            row.get("context"),
-            row.get("passage"),
-            row.get("paragraph"),
-            row.get("rationale"),
-            row.get("ctx"),
-        )
-    )
-
 def _iter_json_records(path: Path) -> Iterator[Dict[str, Any]]:
     if path.suffix == ".jsonl":
         with path.open("r", encoding="utf-8") as handle:
@@ -171,90 +145,13 @@ def load_nq(
             break
 
 
-def load_complextempqa(
+def load_2wiki(
     path: str,
     dataset_version: Optional[str] = None,
     max_rows: Optional[int] = None,
 ) -> Iterator[BenchmarkItem]:
-    source = "complextempqa"
-    count = 0
-    for row in _iter_json_records(Path(path)):
-        question = _first_non_empty(row.get("question"), row.get("query"))
-        answers = _as_list(row.get("answers") or row.get("answer"))
-        if not question or not answers or not _has_context_complextempqa(row):
-            continue
-
-        yield BenchmarkItem(
-            question_id=sha256_text(question),
-            question=question,
-            gold_answers=answers,
-            dataset_source=source,
-            split="",
-            dataset_version=dataset_version,
-        )
-        count += 1
-        if max_rows and count >= max_rows:
-            break
-
-
-def load_wikiwhy(
-    path: str,
-    dataset_version: Optional[str] = None,
-    max_rows: Optional[int] = None,
-) -> Iterator[BenchmarkItem]:
-    source = "wikiwhy"
-    count = 0
-    path_obj = Path(path)
-    if path_obj.suffix == ".csv":
-        with path_obj.open("r", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
-            for row in reader:
-                question = _first_non_empty(row.get("question"), row.get("query"))
-                answers = _as_list(row.get("answer") or row.get("answers"))
-                if not question or not answers or not _has_context_wikiwhy(row):
-                    continue
-                yield BenchmarkItem(
-                    question_id=sha256_text(question),
-                    question=question,
-                    gold_answers=answers,
-                    dataset_source=source,
-                    split="",
-                    dataset_version=dataset_version,
-                )
-                count += 1
-                if max_rows and count >= max_rows:
-                    break
-    else:
-        for row in _iter_json_records(path_obj):
-            question = _first_non_empty(row.get("question"), row.get("query"))
-            answers = _as_list(
-                row.get("answer")
-                or row.get("answers")
-                or row.get("cause")
-                or row.get("effect")
-            )
-            if not question or not answers or not _has_context_wikiwhy(row):
-                continue
-            yield BenchmarkItem(
-                question_id=sha256_text(question),
-                question=question,
-                gold_answers=answers,
-                dataset_source=source,
-                split="",
-                dataset_version=dataset_version,
-            )
-            count += 1
-            if max_rows and count >= max_rows:
-                break
-
-
-def load_hotpotqa(
-    path: str,
-    dataset_version: Optional[str] = None,
-    max_rows: Optional[int] = None,
-) -> Iterator[BenchmarkItem]:
-    """Load HotPotQA data from JSON/JSONL."""
-    source = "hotpotqa"
+    """Load 2WikiMultiHopQA data from JSON/JSONL."""
+    source = "2wiki"
     count = 0
     for row in _iter_json_records(Path(path)):
         question = row.get("question")

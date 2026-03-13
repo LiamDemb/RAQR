@@ -9,7 +9,6 @@ from raqr.data.corpus_schemas import Block
 from raqr.data.docstore import DocRecord, DocStore
 from raqr.data.alias_map import normalize_alias_map
 from raqr.data.enrich_entities import norm_entity
-from raqr.data.enrich_years import aggregate_year_fields, extract_years
 from raqr.data.entity_lexicon import build_entity_lexicon
 
 
@@ -57,15 +56,6 @@ def test_clean_html_removes_citation_markup_but_keeps_plain_brackets():
     all_text = "\n".join(block.text for block in doc.blocks)
     assert "[12]" not in all_text
     assert "Model [3]" in all_text
-
-
-def test_extract_years_and_aggregate():
-    text = "In 1999 the event happened again in 2001-2003."
-    years = extract_years(text)
-    fields = aggregate_year_fields(years, text, token_count=10)
-    assert fields["year_min"] == 1999
-    assert fields["year_max"] == 2003
-    assert 2001 in fields["years"]
 
 
 def test_norm_entity_alias():

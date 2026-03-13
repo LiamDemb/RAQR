@@ -25,7 +25,7 @@ RAG is not "one size fits all". A dense vector lookup works well for factual que
 
 ### Positioning
 
-RAQR differs from prior work that routes purely on linguistic "query complexity" (e.g. EA-GraphRAG-style pipelines that classify queries by surface cues). Instead, RAQR routes by **reasoning needs** (temporal, causal, factual) combined with **dynamic probe signals**—metrics derived from a cheap top-10 Dense retrieval run. This allows the router to detect when a retrieval method is failing (e.g. low confidence scores or flat score distributions) rather than relying solely on query semantics.
+RAQR differs from prior work that routes purely on linguistic "query complexity" (e.g. EA-GraphRAG-style pipelines that classify queries by surface cues). Instead, RAQR routes by **reasoning needs** (causal, factual) combined with **dynamic probe signals**—metrics derived from a cheap top-10 Dense retrieval run. This allows the router to detect when a retrieval method is failing (e.g. low confidence scores or flat score distributions) rather than relying solely on query semantics.
 
 The research project is framed as a controlled experiment using a "Gold Label" (Oracle) methodology.
 
@@ -40,7 +40,6 @@ To ensure broad coverage of reasoning types, the system routes between three dis
 
 1. **Dense RAG:** The baseline vector-chunk retrieval; optimal for specific, local factual lookups.
 2. **GraphRAG:** Relation-aware traversal using **Subject-Predicate-Object triples** for complex, multi-hop reasoning across documents (no entity-only graph; triples are the ground truth).
-3. **Temporal RAG:** **Metadata-filtered dense retrieval** (vector search + year filtering)—no separate temporal Knowledge Graph; Temporal RAG is vector search with year metadata filters.
 
 ## 4. The Variables (What’s Being Tested)
 

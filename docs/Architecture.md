@@ -26,7 +26,6 @@ graph LR
     subgraph Strategies
     S1[Dense RAG]
     S2[Graph RAG]
-    S3[Temporal RAG]
     end
 
     Strategy --> Generator[LLM Generator]
@@ -111,28 +110,27 @@ This approach keeps the project easy to run for assessors while remaining flexib
 
 Responsible for ingesting datasets and normalizing them into a standard schema.
 
-- **Input Formats:** NQ (JSONL), ComplexTempQA (JSON/JSONL), WikiWhy (JSONL/CSV).
+- **Input Formats:** NQ (JSONL), 2WikiMultiHopQA (JSONL)
 - **Unified Corpus Schema (`corpus.jsonl`) (chunk-level):**
     - The authoritative definition is in `docs/Corpus Creation Strategy.md`.
-    - `corpus.jsonl` is a **chunk inventory** shared by all strategies (Dense/Temporal/Graph).
+    - `corpus.jsonl` is a **chunk inventory** shared by all strategies (Dense/Graph).
     ```json
     {
         "chunk_id": "uuid",
         "doc_id": "uuid",
-        "source": "wikipedia|nq|wikiwhy|complextempqa",
+        "source": "wikipedia|nq|2wiki",
         "title": "string|null",
         "url": "string|null",
         "text": "string",
         "section_path": ["Lead", "Early life", "Career"],
         "char_span_in_doc": [1234, 1876],
         "metadata": {
-            "dataset_origin": "nq|wikiwhy|complextempqa|wiki",
+            "dataset_origin": "nq|2wiki",
             "page_id": "string|null",
             "revision_id": "string|null",
             "years": [1998, 2001],
             "year_min": 1998,
             "year_max": 2001,
-            "temporal_density": 0.014,
             "entities": [
                 {
                     "surface": "United States",
@@ -162,7 +160,7 @@ Responsible for ingesting datasets and normalizing them into a standard schema.
         "question_id": "uuid",
         "question": "Who was...",
         "gold_answers": ["Expected string 1", "Expected string 2"],
-        "dataset_source": "nq|complextempqa|wikiwhy",
+        "dataset_source": "nq|2wiki",
         "split": "train|dev|test"
     }
     ```
@@ -175,9 +173,9 @@ Responsible for ingesting datasets and normalizing them into a standard schema.
         "question_id": "uuid",
         "question": "Who was...",
         "gold_answers": ["Expected string 1", "Expected string 2"],
-        "dataset_source": "nq|complextempqa|wikiwhy",
+        "dataset_source": "nq|2wiki",
         "split": "train|dev",
-        "gold_strategy": "Dense_RAG|Temporal_RAG|Graph_RAG" // Populated by Oracle
+        "gold_strategy": "Dense_RAG|Graph_RAG" // Populated by Oracle
     }
     ```
 
@@ -187,7 +185,6 @@ Each strategy class inherits from `BaseStrategy`. There are **3** concrete imple
 
 1.  **`DenseStrategy`:** Custom FAISS indexing (`FaissIndexStore`) + `SentenceTransformersEmbedder`; maps row IDs to chunk texts via `vector_meta.parquet`.
 2.  **`GraphStrategy`:** Relation-aware traversal using **predicate edges** (Subject-Predicate-Object triples) and **provenance edges** (Entity $\rightarrow$ Chunk). Query entity extraction uses an **LLM call** (default) to extract entities from the question; optionally **vector similarity** against an entity index bridges alternate phrasings (e.g. "Einstein" $\rightarrow$ "Albert Einstein"). NetworkX triple traversal (1-hop) resolves evidence chunks via provenance edges. Candidate hop and path relevance scoring is managed via a configurable `ScoringConfig` (`local_pred_weight`, `bundle_pred_weight`, `length_penalty`).
-3.  **`TemporalStrategy`:** FAISS candidate pool (vector search) + explicit year metadata filter. Date extraction (Regex/LLM) $\rightarrow$ retrieve deeper candidate set $\rightarrow$ filter by `year` metadata (refill from deeper ranks until \(k\) contexts). **No temporal KG;** Temporal RAG is metadata-filtered dense retrieval only.
 
 ### C. The Probe Module (`src/probe`)
 
@@ -241,7 +238,7 @@ The codebase is organized to run in **4 sequential stages**:
     1.  Loops through the Benchmark Dataset.
     2.  Runs **ALL 3** strategies for every question.
     3.  Evaluates answers using **LLM-as-judge** for semantic correctness.
-    4.  Selects the winner using a **margin-based simplicity bias** rule (\(\delta\)) with deterministic tie-break: **Dense > Temporal > Graph**.
+    4.  Selects the winner using a **margin-based simplicity bias** rule (\(\delta\)) with deterministic tie-break: **Dense > Graph**.
 - **Artifacts:** `data/training/labeled_train.jsonl`, `data/training/labeled_dev.jsonl` (This is your training data).
 
 ### Stage 3: Training (Classifier Only)

@@ -1,9 +1,7 @@
 """
 Download 2WikiMultiHopQA records from Hugging Face.
 
-2WikiMultiHopQA is a multi-hop QA dataset with reasoning paths over Wikipedia,
-similar to HotPotQA. The framolfese variant uses a HotPotQA-compatible schema
-(supporting_facts.title, supporting_facts.sent_id) so existing loaders work.
+2WikiMultiHopQA is a multi-hop QA dataset with reasoning paths over Wikipedia.
 
 See: https://huggingface.co/datasets/framolfese/2WikiMultihopQA
 

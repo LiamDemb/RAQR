@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 
 class BaseStrategy(ABC):
-    name: str  # "Dense", "Temporal", "Graph"
+    name: str  # "Dense", "Graph"
 
     @abstractmethod
     def retrieve_and_generate(self, query: str, **kwargs) -> StrategyResult:
