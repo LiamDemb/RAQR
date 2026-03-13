@@ -14,7 +14,17 @@ Types: bridge_comparison, comparison, etc.
 import argparse
 from pathlib import Path
 
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
+
+from raqr.data.wikipedia_find_page import wikipedia_find_page
+
+
+def titles_exist(x):
+    titles = set(x["supporting_facts"]["title"])
+    for t in titles:
+        if not wikipedia_find_page(t):
+            return False
+    return True
 
 
 def main(
@@ -25,16 +35,25 @@ def main(
 ) -> None:
     ds = load_dataset("framolfese/2WikiMultihopQA", split=split)
 
-    # Filter by question type (e.g. bridge_comparison, comparison)
+    # Filter by question type
     if types is not None and types.strip():
         allowed = set(t.strip().lower() for t in types.split(",") if t.strip())
         if allowed:
             ds = ds.filter(lambda x: (x.get("type") or "").lower() in allowed)
 
-    n_total = len(ds)
+    ds = ds.shuffle(seed=42)
 
     if num_samples is not None and num_samples > 0:
-        ds = ds.shuffle(seed=42).select(range(min(num_samples, n_total)))
+        valid_rows = []
+
+        for row in ds:
+            if titles_exist(row):
+                valid_rows.append(row)
+
+            if len(valid_rows) >= num_samples:
+                break
+
+        ds = Dataset.from_list(valid_rows)
 
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -92,7 +92,11 @@ def test_chunk_blocks_bounds():
 def test_chunk_blocks_respects_max_tokens():
     """No chunk exceeds max_tokens (tiktoken cl100k_base)."""
     blocks = [
-        Block(text="The quick brown fox " * 100, section_path=["Lead"], block_type="paragraph"),
+        Block(
+            text="The quick brown fox " * 100,
+            section_path=["Lead"],
+            block_type="paragraph",
+        ),
     ]
     max_tokens = 200
     chunks = chunk_blocks(
@@ -103,7 +107,9 @@ def test_chunk_blocks_respects_max_tokens():
     )
     assert len(chunks) >= 1
     for chunk in chunks:
-        assert chunk.token_count <= max_tokens, f"chunk has {chunk.token_count} tokens, max={max_tokens}"
+        assert (
+            chunk.token_count <= max_tokens
+        ), f"chunk has {chunk.token_count} tokens, max={max_tokens}"
 
 
 def test_chunk_blocks_long_block_splitting():
@@ -140,7 +146,9 @@ def test_chunk_blocks_hard_caps_max_even_below_min():
     )
     assert len(chunks) >= 2
     for chunk in chunks:
-        assert chunk.token_count <= max_tokens, f"chunk has {chunk.token_count} tokens, max={max_tokens}"
+        assert (
+            chunk.token_count <= max_tokens
+        ), f"chunk has {chunk.token_count} tokens, max={max_tokens}"
 
 
 def test_build_graph_nodes():

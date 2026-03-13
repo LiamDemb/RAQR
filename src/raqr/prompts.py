@@ -151,8 +151,8 @@ INPUT TEXT:
 
 
 def get_onepass_extraction_prompt() -> str:
-    """Return the one-pass extraction prompt. Override via LLM_ONEPASS_PROMPT_FILE env."""
-    path = os.getenv("LLM_ONEPASS_PROMPT_FILE")
+    """Return the one-pass extraction prompt. Override via LLM_IE_PROMPT_FILE env."""
+    path = os.getenv("LLM_IE_PROMPT_FILE")
     if path and Path(path).is_file():
         return Path(path).read_text(encoding="utf-8")
     return DEFAULT_ONEPASS_EXTRACTION_PROMPT

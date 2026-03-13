@@ -17,7 +17,7 @@ This is the Python package. All reusable logic lives here.
 ## 2. Experimentation & Execution
 *   **`configs/`**: YAML files for configuration (e.g., `ablation_v1.yaml`). Used to switch between model types and input signals without changing code.
 *   **`notebooks/`**: Jupyter notebooks for Exploratory Data Analysis (EDA), visualizing skewness distributions, and debugging individual components.
-*   **`scripts/`**: Executable Python scripts. Pipeline stages (Ingestion $\to$ Oracle $\to$ Training $\to$ Evaluation) live at the root (e.g. `01_ingest_data.py`, `01_build_corpus.py`). Manual dev/testing scripts live in `scripts/dev/` (e.g. `evaluate_strategies.py`, `mock_oracle_eval.py`).
+*   **`scripts/`**: Executable Python scripts. Pipeline stages (Ingestion $\to$ Oracle $\to$ Training $\to$ Evaluation) live at the root (e.g. `01_ingest_data.py`, `01_build_corpus.py`). Manual dev/testing scripts live in `scripts/dev/` (e.g. `evaluate_strategies.py`, `grid_search_graph.py`). Strategy-specific scripts live in `scripts/strategies/` (e.g. `check_graph_integration.py`, `debug_graph.py`, `batch_debug_graph.py`).
 *   **`tests/`**: Unit tests (`pytest`) to ensure the Probe calculates math correctly and Strategies return valid data.
 
 ## 3. Data Storage (Local Artifacts)

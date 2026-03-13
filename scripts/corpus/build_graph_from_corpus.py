@@ -59,7 +59,12 @@ def main() -> int:
     graph_path = Path(args.graph_out)
     graph_path.parent.mkdir(parents=True, exist_ok=True)
     pd.to_pickle(graph, graph_path)
-    logger.info("Wrote graph to %s (%d nodes, %d edges)", graph_path, graph.number_of_nodes(), graph.number_of_edges())
+    logger.info(
+        "Wrote graph to %s (%d nodes, %d edges)",
+        graph_path,
+        graph.number_of_nodes(),
+        graph.number_of_edges(),
+    )
     return 0
 
 

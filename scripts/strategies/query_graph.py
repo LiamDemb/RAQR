@@ -14,6 +14,7 @@ from raqr.graph_store import NetworkXGraphStore
 from raqr.loaders import JsonCorpusLoader
 from raqr.prompts import get_generator_prompt
 from raqr.strategies.graph import GraphStrategy, _default_query_entity_extractor
+from raqr.embedder import SentenceTransformersEmbedder
 
 
 def main() -> int:
@@ -52,7 +53,7 @@ def main() -> int:
         )
 
     alias_resolver = EntityAliasResolver.from_artifacts(output_dir=output_dir)
-    entity_df_by_norm = EntityAliasResolver.load_df_map_from_lexicon(lexicon_path=lexicon_path)
+
     entity_index_path = f"{output_dir}/entity_index.faiss"
     entity_meta_path = f"{output_dir}/entity_index_meta.parquet"
     entity_index_store = None
@@ -71,8 +72,8 @@ def main() -> int:
         entity_extractor=_default_query_entity_extractor(alias_resolver),
         top_k=args.top_k,
         max_hops=args.max_hops,
-        entity_df_by_norm=entity_df_by_norm,
         entity_index_store=entity_index_store,
+        embedder=SentenceTransformersEmbedder(model_name="all-MiniLM-L6-v2"),
     )
 
     result = strategy.retrieve_and_generate(args.query)
@@ -93,4 +94,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

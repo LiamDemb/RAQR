@@ -50,7 +50,9 @@ def _tok(text: str, *, is_stop: bool = False, pos_: str = "NOUN") -> _Token:
 def test_noun_chunks_disabled_returns_only_ner_entities():
     doc = _Doc(
         ents=[],
-        noun_chunks=[_Span(text="United States", tokens=[_tok("United"), _tok("States")])],
+        noun_chunks=[
+            _Span(text="United States", tokens=[_tok("United"), _tok("States")])
+        ],
     )
     ents = extract_entities_spacy(
         text="dummy",
@@ -64,7 +66,16 @@ def test_noun_chunks_disabled_returns_only_ner_entities():
 def test_noun_chunks_enabled_adds_np_entity_when_ner_misses():
     doc = _Doc(
         ents=[],
-        noun_chunks=[_Span(text="The United States", tokens=[_tok("The", is_stop=True, pos_="DET"), _tok("United"), _tok("States")])],
+        noun_chunks=[
+            _Span(
+                text="The United States",
+                tokens=[
+                    _tok("The", is_stop=True, pos_="DET"),
+                    _tok("United"),
+                    _tok("States"),
+                ],
+            )
+        ],
     )
     ents = extract_entities_spacy(
         text="dummy",
@@ -80,11 +91,23 @@ def test_noun_chunks_enabled_adds_np_entity_when_ner_misses():
 def test_noun_chunk_filters_length_and_stopword_ratio():
     long_chunk = _Span(
         text="one two three four five six",
-        tokens=[_tok("one"), _tok("two"), _tok("three"), _tok("four"), _tok("five"), _tok("six")],
+        tokens=[
+            _tok("one"),
+            _tok("two"),
+            _tok("three"),
+            _tok("four"),
+            _tok("five"),
+            _tok("six"),
+        ],
     )
     stopword_heavy = _Span(
         text="the of and thing",
-        tokens=[_tok("the", is_stop=True, pos_="DET"), _tok("of", is_stop=True, pos_="ADP"), _tok("and", is_stop=True), _tok("thing")],
+        tokens=[
+            _tok("the", is_stop=True, pos_="DET"),
+            _tok("of", is_stop=True, pos_="ADP"),
+            _tok("and", is_stop=True),
+            _tok("thing"),
+        ],
     )
     doc = _Doc(ents=[], noun_chunks=[long_chunk, stopword_heavy])
     ents = extract_entities_spacy(
@@ -107,7 +130,14 @@ def test_noun_chunk_entities_are_deduped_and_sorted_by_norm():
             _Span(text="Alpha Org", label_="ORG"),
         ],
         noun_chunks=[
-            _Span(text="the zeta corp", tokens=[_tok("the", is_stop=True, pos_="DET"), _tok("zeta"), _tok("corp")]),
+            _Span(
+                text="the zeta corp",
+                tokens=[
+                    _tok("the", is_stop=True, pos_="DET"),
+                    _tok("zeta"),
+                    _tok("corp"),
+                ],
+            ),
             _Span(text="alpha org", tokens=[_tok("alpha"), _tok("org")]),
         ],
     )

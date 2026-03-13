@@ -6,6 +6,8 @@ import ast
 import os
 
 from raqr.prompts import get_generator_prompt
+from raqr.embedder import SentenceTransformersEmbedder
+from raqr.scoring_config import DEFAULT_SCORING_CONFIG
 
 # Legacy: BASE_PROMPT kept for any direct imports; prefer get_generator_prompt() for env override.
 # See raqr.prompts for BASE_PROMPT_OLD and other commented alternatives.
@@ -32,7 +34,6 @@ def normalize_gold_answers(raw: list) -> list[str]:
 
 def build_dense_strategy(output_dir: str):
     """Build DenseStrategy with corpus, index, embedder, generator."""
-    from raqr.embedder import SentenceTransformersEmbedder
     from raqr.generator import SimpleLLMGenerator
     from raqr.index_store import FaissIndexStore
     from raqr.loaders import JsonCorpusLoader, VectorMetaMapper
@@ -55,7 +56,7 @@ def build_dense_strategy(output_dir: str):
 
 
 def build_graph_strategy(output_dir: str):
-    """Build GraphStrategy with corpus, graph, generator, entity extractor."""
+    """Build GraphStrategy with corpus, graph, generator, entity extractor, embedder."""
     from raqr.entity_alias_resolver import EntityAliasResolver
     from raqr.entity_index_store import EntityIndexStore
     from raqr.generator import SimpleLLMGenerator
@@ -74,10 +75,15 @@ def build_graph_strategy(output_dir: str):
         )
 
     alias_resolver = EntityAliasResolver.from_artifacts(output_dir=output_dir)
-    entity_df_by_norm = EntityAliasResolver.load_df_map_from_lexicon(lexicon_path=lexicon_path)
+
     entity_index_store = None
-    if os.path.exists(f"{output_dir}/entity_index.faiss") and os.path.exists(f"{output_dir}/entity_index_meta.parquet"):
-        entity_index_store = EntityIndexStore(f"{output_dir}/entity_index.faiss", f"{output_dir}/entity_index_meta.parquet")
+    if os.path.exists(f"{output_dir}/entity_index.faiss") and os.path.exists(
+        f"{output_dir}/entity_index_meta.parquet"
+    ):
+        entity_index_store = EntityIndexStore(
+            f"{output_dir}/entity_index.faiss",
+            f"{output_dir}/entity_index_meta.parquet",
+        )
     return GraphStrategy(
         graph_store=NetworkXGraphStore(graph_path=graph_path),
         corpus=JsonCorpusLoader(jsonl_path=corpus_path),
@@ -88,6 +94,7 @@ def build_graph_strategy(output_dir: str):
         entity_extractor=_default_query_entity_extractor(alias_resolver),
         top_k=int(os.getenv("GRAPH_TOP_K", "10")),
         max_hops=int(os.getenv("GRAPH_MAX_HOPS", "1")),
-        entity_df_by_norm=entity_df_by_norm,
         entity_index_store=entity_index_store,
+        embedder=SentenceTransformersEmbedder(model_name="all-MiniLM-L6-v2"),
+        scoring_config=DEFAULT_SCORING_CONFIG,
     )

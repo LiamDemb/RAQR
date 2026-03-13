@@ -24,6 +24,7 @@ load_dotenv()
 # Import from same directory (scripts/dev)
 import sys
 from pathlib import Path as _Path
+
 sys.path.insert(0, str(_Path(__file__).resolve().parent))
 from _common import (
     build_dense_strategy,
@@ -82,7 +83,9 @@ def token_f1(pred: str, gold_list: list[str]) -> float:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Evaluate Dense and Graph strategies on benchmark.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate Dense and Graph strategies on benchmark."
+    )
     parser.add_argument(
         "--benchmark",
         default=os.getenv("BENCHMARK_PATH", "data/processed/benchmark.jsonl"),
@@ -140,12 +143,17 @@ def main() -> int:
     judge = None
     if args.use_llm_judge:
         from raqr.llm_judge import LLMJudge
+
         judge = LLMJudge()
         print("Using LLM-as-judge for correctness.")
     print(f"Evaluating on {len(samples)} questions.\n")
 
-    results_dense: dict[str, dict] = defaultdict(lambda: {"em": 0, "f1": 0.0, "judge": 0, "correct": 0, "total": 0})
-    results_graph: dict[str, dict] = defaultdict(lambda: {"em": 0, "f1": 0.0, "judge": 0, "correct": 0, "total": 0})
+    results_dense: dict[str, dict] = defaultdict(
+        lambda: {"em": 0, "f1": 0.0, "judge": 0, "correct": 0, "total": 0}
+    )
+    results_graph: dict[str, dict] = defaultdict(
+        lambda: {"em": 0, "f1": 0.0, "judge": 0, "correct": 0, "total": 0}
+    )
     time_dense_sec = 0.0
     time_graph_sec = 0.0
     t_start = time.perf_counter()
@@ -206,13 +214,19 @@ def main() -> int:
         results_graph["_all"]["total"] += 1
 
         if args.verbose:
+
             def _trunc(s: str, n: int = 60) -> str:
                 return s[:n] + "..." if len(s) > n else s
+
             correct_label = "Judge" if judge else "EM"
             print(f"[{idx + 1}] {_trunc(question)}")
             print(f"  Gold: {_trunc(gold_list[0])}")
-            print(f"  Dense: {correct_label}={('✓' if correct_dense else '✗')} EM={'✓' if em_dense else '✗'} F1={f1_dense:.3f} {_trunc(pred_dense)}")
-            print(f"  Graph: {correct_label}={('✓' if correct_graph else '✗')} EM={'✓' if em_graph else '✗'} F1={f1_graph:.3f} {_trunc(pred_graph)}")
+            print(
+                f"  Dense: {correct_label}={('✓' if correct_dense else '✗')} EM={'✓' if em_dense else '✗'} F1={f1_dense:.3f} {_trunc(pred_dense)}"
+            )
+            print(
+                f"  Graph: {correct_label}={('✓' if correct_graph else '✗')} EM={'✓' if em_graph else '✗'} F1={f1_graph:.3f} {_trunc(pred_graph)}"
+            )
             print()
 
     # Print summary (Judge primary when --use-llm-judge, else F1)
@@ -232,9 +246,13 @@ def main() -> int:
             correct_pct = 100 * r["correct"] / n
             if judge:
                 judge_n = r["judge"]
-                print(f"  {key}: Judge={judge_n}/{n} ({correct_pct:.1f}%), F1={f1_avg:.3f}, EM={r['em']}/{n} ({em_pct:.1f}%)")
+                print(
+                    f"  {key}: Judge={judge_n}/{n} ({correct_pct:.1f}%), F1={f1_avg:.3f}, EM={r['em']}/{n} ({em_pct:.1f}%)"
+                )
             else:
-                print(f"  {key}: F1={f1_avg:.3f}, EM={r['correct']}/{n} ({em_pct:.1f}%)")
+                print(
+                    f"  {key}: F1={f1_avg:.3f}, EM={r['correct']}/{n} ({em_pct:.1f}%)"
+                )
         r_all = res["_all"]
         n_all = r_all["total"]
         f1_avg = r_all["f1"] / n_all
@@ -242,9 +260,13 @@ def main() -> int:
         correct_pct = 100 * r_all["correct"] / n_all
         print(f"  ---")
         if judge:
-            print(f"  OVERALL: Judge={r_all['correct']}/{n_all} ({correct_pct:.1f}%), F1={f1_avg:.3f}, EM={r_all['em']}/{n_all} ({em_pct:.1f}%)")
+            print(
+                f"  OVERALL: Judge={r_all['correct']}/{n_all} ({correct_pct:.1f}%), F1={f1_avg:.3f}, EM={r_all['em']}/{n_all} ({em_pct:.1f}%)"
+            )
         else:
-            print(f"  OVERALL: F1={f1_avg:.3f}, EM={r_all['correct']}/{n_all} ({em_pct:.1f}%)")
+            print(
+                f"  OVERALL: F1={f1_avg:.3f}, EM={r_all['correct']}/{n_all} ({em_pct:.1f}%)"
+            )
 
     _print_strategy("Dense", results_dense)
     _print_strategy("Graph", results_graph)

@@ -3,16 +3,22 @@ from raqr.data.corpus_schemas import Block
 
 def is_infobox_table(table) -> bool:
     """Check if a given table is an infobox."""
-    if "infobox" in table.attrs['class']:
+    if "infobox" in table.attrs.get("class", []):
         return True
     return False
 
-def linearize_infobox_table(table) -> list[Block]:
+def linearize_infobox_table(table, page_title: str = "") -> list[Block]:
     """Linearize a given infobox table into a string of text."""
     
     infobox_text = ""
 
-    page_title = table.find('div', class_='fn').get_text()
+    # Get subject
+    title = table.find('div', class_='fn')
+    subject = ""
+    if title:
+        subject = title.get_text()
+    else:
+        subject = page_title
 
     # Iterate through rows
     rows = table.find_all("tr")
@@ -24,7 +30,7 @@ def linearize_infobox_table(table) -> list[Block]:
             values = value_cell.find_all('span', recursive=False)
             for value in values:
                 if value.get_text() != "":
-                    infobox_text += f'{page_title} -- {label.get_text()} --> {value.get_text()}\n'
+                    infobox_text += f'{subject} -- {label.get_text()} --> {value.get_text()}\n'
 
             # Links
             links = row.find_all('a')
@@ -33,17 +39,17 @@ def linearize_infobox_table(table) -> list[Block]:
                 for link in links:
                     if link.get_text() != "":
                         birthplace += link.get_text() + ", "
-                infobox_text += f'{page_title} -- {label.get_text()} --> {birthplace[:-2]}\n'
+                infobox_text += f'{subject} -- {label.get_text()} --> {birthplace[:-2]}\n'
             else:
                 for link in links:
                     if link.get_text() != "":
-                        infobox_text += f'{page_title} -- {label.get_text()} --> {link.get_text()}\n'
+                        infobox_text += f'{subject} -- {label.get_text()} --> {link.get_text()}\n'
 
             # Handle nested lists
             list_elements = row.find_all('li')
             for list_element in list_elements:
                 if list_element.get_text() != "":
-                    infobox_text += f'{page_title} -- {label.get_text()} --> {list_element.get_text()}\n'
+                    infobox_text += f'{subject} -- {label.get_text()} --> {list_element.get_text()}\n'
         
     return infobox_text.strip()
 

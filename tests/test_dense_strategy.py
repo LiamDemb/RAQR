@@ -24,7 +24,10 @@ def _make_tiny_index_and_meta(tmp_path: Path, dim: int = 384):
     idx_path = tmp_path / "vector_index.faiss"
     faiss.write_index(index, str(idx_path))
     meta = pd.DataFrame(
-        [{"row_id": i, "chunk_id": f"c{i}", "year_min": None, "year_max": None} for i in range(n)]
+        [
+            {"row_id": i, "chunk_id": f"c{i}", "year_min": None, "year_max": None}
+            for i in range(n)
+        ]
     )
     meta_path = tmp_path / "vector_meta.parquet"
     meta.to_parquet(meta_path, index=False)
