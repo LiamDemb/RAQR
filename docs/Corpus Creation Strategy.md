@@ -1,46 +1,47 @@
 # RAQR Unified Corpus Creation Pipeline
 
-**Goal:** Build a **Unified Mega Corpus** that enables a scientifically fair “Gold Label Oracle” evaluation across **Dense RAG**, **GraphRAG (NetworkX)**, and **Temporal RAG (year-filtered retrieval)** under a shared retrieval interface and shared artifacts (FAISS + NetworkX).  
-
+**Goal:** Build a **Unified Mega Corpus** that enables a scientifically fair “Gold Label Oracle” evaluation across **Dense RAG**, **GraphRAG (NetworkX)**, and **Temporal RAG (year-filtered retrieval)** under a shared retrieval interface and shared artifacts (FAISS + NetworkX).
 
 ## 0) Design Objectives and Non-Goals
 
 ### Objectives
 
-1. **Unified**: All strategies operate over the *same* corpus and chunk inventory.
+1. **Unified**: All strategies operate over the _same_ corpus and chunk inventory.
 2. **Connective tissue**: The corpus must contain:
+    - **multi-hop relational links** (to give GraphRAG a real advantage),
+    - **temporal anchors** (`year` metadata; to give Temporal RAG a real advantage).
 
-   * **multi-hop relational links** (to give GraphRAG a real advantage),
-   * **temporal anchors** (`year` metadata; to give Temporal RAG a real advantage).
 3. **Fairness**: No dataset gets special treatment; corpus expansion is driven by the same rules/budgets across datasets.
 4. **Completeness**: For each sampled question, the corpus should contain answer-bearing evidence, even if it requires **1–2 hops**.
 5. **Efficiency**: Must scale to ~1,500 questions without downloading full Wikipedia dumps.
 
 ### Non-goals
 
-* Building a perfect KG (GraphRAG is intentionally “minimum viable,” NetworkX-based). 
-* Exhaustive Wikipedia ingestion.
-* **A separate temporal Knowledge Graph.** Temporal RAG uses metadata-filtered dense retrieval (vector search + year filter), not a temporal KG.
-
+- Building a perfect KG (GraphRAG is intentionally “minimum viable,” NetworkX-based).
+- Exhaustive Wikipedia ingestion.
+- **A separate temporal Knowledge Graph.** Temporal RAG uses metadata-filtered dense retrieval (vector search + year filter), not a temporal KG.
 
 ## 1) Inputs, Outputs, and Physical Artifacts
 
 ### Inputs (sampled question sets)
 
-* **ComplexTempQA**: Wikidata QIDs (`question_entity`, `answer_entity`, etc.), no raw text.
-* **WikiWhy**: Wikipedia `title` per question.
-* **Natural Questions (NQ)**: raw HTML/tokens with `is_html` flags.
+- **ComplexTempQA**: Wikidata QIDs (`question_entity`, `answer_entity`, etc.), no raw text.
+- **WikiWhy**: Wikipedia `title` per question.
+- **HotPotQA**: `supporting_facts.title` — a list of 2 Wikipedia page titles per question (the gold supporting documents).
+- **Natural Questions (NQ)**: raw HTML/tokens with `is_html` flags.
 
 ### Outputs (offline artifacts)
 
 1. `data/processed/corpus.jsonl` — unified chunked corpus (schema below).
 2. `data/processed/docstore.sqlite` (or LMDB) — page-level cache + chunk metadata (for dedupe and reproducibility).
-3. `data/processed/vector_index.faiss` + `data/processed/vector_meta.parquet` — embeddings + metadata mapping (FAISS has no native metadata filtering, so store metadata externally).  
-4. `data/processed/graph.pkl` — NetworkX graph (Entity-Relation-Entity edges + Entity-Chunk provenance edges).  
+3. `data/processed/vector_index.faiss` + `data/processed/vector_meta.parquet` — embeddings + metadata mapping (FAISS has no native metadata filtering, so store metadata externally).
+4. `data/processed/graph.pkl` — NetworkX graph (Entity-Relation-Entity edges + Entity-Chunk provenance edges).
 5. `data/processed/entity_lexicon.parquet` — canonical entity strings, aliases, and optional QIDs (used for normalization).
+6. `data/processed/entity_index.faiss` + `entity_index_meta.parquet` — FAISS index over entity norms for vector similarity matching at query time.
+7. `data/processed/wiki_titles.jsonl` — Wikipedia page titles fetched for the corpus (used for LLM seed anchoring).
+8. `data/processed/alias_map.json` — deterministic redirect-mined alias artifact (`Dict[str, str]`, normalized alias -> normalized canonical) produced at corpus-build time; used for FlashText expansion and query normalization.
 
-These artifacts align with the modular “offline prep vs online routing & inference” separation. 
-
+These artifacts align with the modular “offline prep vs online routing & inference” separation.
 
 ## 2) Unified `corpus.jsonl` Schema
 
@@ -48,63 +49,80 @@ Each line is one **chunk**, not one document.
 
 ```json
 {
-  "chunk_id": "uuid",
-  "doc_id": "uuid",
-  "source": "wikipedia|nq|wikiwhy|complextempqa",
-  "title": "string|null",
-  "url": "string|null",
-  "text": "string",
-  "section_path": ["Lead", "Early life", "Career"],
-  "char_span_in_doc": [1234, 1876],
+    "chunk_id": "uuid",
+    "doc_id": "uuid",
+    "source": "wikipedia|nq|wikiwhy|complextempqa|hotpotqa",
+    "title": "string|null",
+    "url": "string|null",
+    "text": "string",
+    "section_path": ["Lead", "Early life", "Career"],
+    "char_span_in_doc": [1234, 1876],
 
-  "metadata": {
-    "dataset_origin": "nq|wikiwhy|complextempqa|wiki",
-    "page_id": "string|null",
-    "revision_id": "string|null",
+    "metadata": {
+        "dataset_origin": "nq|wikiwhy|complextempqa|hotpotqa|wiki",
+        "page_id": "string|null",
+        "revision_id": "string|null",
 
-    "years": [1998, 2001],
-    "year_min": 1998,
-    "year_max": 2001,
-    "temporal_density": 0.014,
+        "years": [1998, 2001],
+        "year_min": 1998,
+        "year_max": 2001,
+        "temporal_density": 0.014,
 
-    "entities": [
-      {"surface": "United States", "norm": "united states", "type": "GPE", "qid": "Q30"},
-      {"surface": "Barack Obama", "norm": "barack obama", "type": "PERSON", "qid": "Q76"}
-    ],
+        "entities": [
+            {
+                "surface": "United States",
+                "norm": "united states",
+                "type": "GPE",
+                "qid": "Q30"
+            },
+            {
+                "surface": "Barack Obama",
+                "norm": "barack obama",
+                "type": "PERSON",
+                "qid": "Q76"
+            }
+        ],
 
-    "relations": [
-      {"subj_norm": "barack obama", "pred": "born_in", "obj_norm": "united states"}
-    ],
+        "relations": [
+            {
+                "subj_norm": "barack obama",
+                "pred": "born_in",
+                "obj_norm": "united states"
+            }
+        ],
 
-    "anchors": {
-      "outgoing_titles": ["List of ...", "France", "2012 Summer Olympics"],
-      "incoming_stub": []
+        "anchors": {
+            "outgoing_titles": [
+                "List of ...",
+                "France",
+                "2012 Summer Olympics"
+            ],
+            "incoming_stub": []
+        }
     }
-  }
 }
 ```
 
 **Notes**
 
-* The corpus supports **relation extraction (triples)** for GraphRAG: `relations[]` enables relation-aware 1-hop expansion `Entity --predicate--> Entity`, with evidence resolved via `Entity -> Chunk` provenance edges.
-* The corpus supports **year extraction** for Temporal RAG: `years/year_min/year_max` enable metadata-filtered dense retrieval (vector search + year filter). There is **no separate temporal Knowledge Graph**; Temporal RAG is metadata filtering on the shared vector store.
-* `entities[].norm` is the GraphRAG join key (string-canonical), with optional `qid` when resolvable.
-* `anchors.outgoing_titles` is lightweight “connective tissue” to support multi-hop traversal without requiring a full hyperlink graph.
-
+- The corpus supports **relation extraction (triples)** for GraphRAG: `relations[]` enables relation-aware 1-hop expansion `Entity --predicate--> Entity`, with evidence resolved via `Entity -> Chunk` provenance edges.
+- The corpus supports **year extraction** for Temporal RAG: `years/year_min/year_max` enable metadata-filtered dense retrieval (vector search + year filter). There is **no separate temporal Knowledge Graph**; Temporal RAG is metadata filtering on the shared vector store.
+- `entities[].norm` is the GraphRAG join key (string-canonical), with optional `qid` when resolvable.
+- `anchors.outgoing_titles` is lightweight “connective tissue” to support multi-hop traversal without requiring a full hyperlink graph.
 
 ## 3) Pipeline Overview (Start-to-Finish)
 
 ### Stage A — Sampling & Budgeting
 
-**Input:** ~750–1,500 questions balanced across datasets. 
+**Input:** ~750–1,500 questions balanced across datasets.
 **Output:** `data/interim/benchmark_sample.jsonl` (question-only; no gold strategy label).
 
-**Fairness rule:** Every question receives the *same* maximum expansion budget:
+**Fairness rule:** Every question receives the _same_ maximum expansion budget:
 
-* `MAX_PAGES_PER_QUESTION` (e.g., 12)
-* `MAX_HOPS` (e.g., 2)
-* `MAX_LIST_PAGES_PER_QUESTION` (e.g., 2)
-* `MAX_COUNTRY_PAGES_PER_QUESTION` (e.g., 1)
+- `MAX_PAGES_PER_QUESTION` (e.g., 12)
+- `MAX_HOPS` (e.g., 2)
+- `MAX_LIST_PAGES_PER_QUESTION` (e.g., 2)
+- `MAX_COUNTRY_PAGES_PER_QUESTION` (e.g., 1)
 
 ### Stage B — Source-Specific Ingestion (Doc Acquisition)
 
@@ -114,31 +132,31 @@ Produce a set of **page candidates** per question. Dedupe globally by `page_id`/
 
 Convert each acquired doc into:
 
-* `doc.text` (clean prose, preserves headings/lists where possible),
-* `doc.section_tree` (for chunk provenance),
-* `doc.anchors` (outgoing titles).
+- `doc.text` (clean prose, preserves headings/lists where possible),
+- `doc.section_tree` (for chunk provenance),
+- `doc.anchors` (outgoing titles).
 
 ### Stage D — Unified Enrichment Layer
 
 Run **the same enrichment** on all docs:
 
-* Regex date extraction → `years` metadata
-* Entity extraction + normalization policy → `entities` metadata
-* Relation extraction (semantic triples) → `relations` metadata (and graph edges)
+- Regex date extraction → `years` metadata
+- Entity + relation extraction (LLM IE batch) → `entities` + `relations` metadata (and graph edges)
 
 ### Stage E — Chunking & Serialization
 
-Chunk to 500–1000 tokens with overlap; write `corpus.jsonl`.
+Chunk to 500–800 tokens (tiktoken) with overlap; write `corpus.jsonl`. LLM IE extraction runs per chunk via the Batch API.
+
+**Token limits:** Chunking uses configurable `CHUNK_MIN_TOKENS`, `CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`. The embedder (all-MiniLM-L6-v2) truncates at 256 tokens internally.
 
 ### Stage F — Indexing
 
-* Embed chunks → build FAISS
-* Build NetworkX graph from extracted relations (triples) + provenance edges
+- Embed chunks → build FAISS
+- Build NetworkX graph from extracted relations (triples) + provenance edges
 
 ### Stage G — Quality Gates (Required)
 
-* Coverage and diagnostics to ensure Graph/Temporal have a fair chance (see Section 8).
-
+- Coverage and diagnostics to ensure Graph/Temporal have a fair chance (see Section 8).
 
 ## 4) Source-Specific Ingestion Specifications
 
@@ -151,39 +169,38 @@ Chunk to 500–1000 tokens with overlap; write `corpus.jsonl`.
 
 For each question:
 
-* Collect seed QIDs:
+- Collect seed QIDs:
+    - `question_entity` (and any additional linked QIDs present)
+    - `answer_entity`
 
-  * `question_entity` (and any additional linked QIDs present)
-  * `answer_entity`
-* Resolve each QID to:
-
-  * Wikipedia title(s) via sitelinks
-  * Optional redirects/aliases
+- Resolve each QID to:
+    - Wikipedia title(s) via sitelinks
+    - Optional redirects/aliases
 
 **Acquisition:** Use Wikipedia API to fetch article plaintext (or HTML then clean) + section headers + links.
 
 #### 4.1.2 Hop Expansion (Connective Tissue)
 
-We create a *bounded* expansion set per question:
+We create a _bounded_ expansion set per question:
 
 **Hop-0 (seed pages):**
 
-* page(question_entity)
-* page(answer_entity)
+- page(question_entity)
+- page(answer_entity)
 
 **Hop-1 (relational/context pages):**
 
-* For each seed QID, pull a small set of “context QIDs” from Wikidata properties (bounded):
+- For each seed QID, pull a small set of “context QIDs” from Wikidata properties (bounded):
+    - geographic: `country (P17)`, `located in admin entity (P131)`
+    - membership/affiliation: `member of (P463)`, `part of (P361)`
+    - time-bearing: `inception (P571)`, `point in time (P585)` → used to prioritize pages likely containing dates
 
-  * geographic: `country (P17)`, `located in admin entity (P131)`
-  * membership/affiliation: `member of (P463)`, `part of (P361)`
-  * time-bearing: `inception (P571)`, `point in time (P585)` → used to prioritize pages likely containing dates
-* Resolve those context QIDs to pages.
+- Resolve those context QIDs to pages.
 
 **Hop-2 (optional, strict budget):**
 
-* Only if remaining budget and query appears multi-hop (e.g., multiple entities detected).
-* Expand via outgoing Wikipedia links from Hop-0 pages (top-N links by lead/infobox presence).
+- Only if remaining budget and query appears multi-hop (e.g., multiple entities detected).
+- Expand via outgoing Wikipedia links from Hop-0 pages (top-N links by lead/infobox presence).
 
 #### 4.1.3 Country Page Expansion (Temporal + Context)
 
@@ -191,9 +208,8 @@ We create a *bounded* expansion set per question:
 
 **Rule (bounded, fairness-preserving):**
 
-* If any seed/context entity resolves to a page whose Wikidata `P17` exists:
-
-  * include **one** country page maximum per question (and optionally “History of {Country}” if it exists and budget allows).
+- If any seed/context entity resolves to a page whose Wikidata `P17` exists:
+    - include **one** country page maximum per question (and optionally “History of {Country}” if it exists and budget allows).
 
 #### 4.1.4 “List of …” Page Expansion (Temporal + Multi-Instance Evidence)
 
@@ -240,7 +256,6 @@ def ingest_complextempqa(example, budgets):
     return fetch_wikipedia_docs(pages)  # cached + deduped
 ```
 
-
 ### 4.2 Natural Questions (NQ) HTML Cleaning While Preserving Structure
 
 **Problem:** NQ provides HTML/tokens with `is_html`. Naive stripping destroys headings, lists, and tables (which are valuable for multi-hop and temporal signals).
@@ -250,14 +265,13 @@ def ingest_complextempqa(example, budgets):
 1. **Reconstruct HTML** using token sequence and `is_html` flags (when available), otherwise use the provided HTML field directly.
 2. Parse with an HTML parser (e.g., BeautifulSoup/lxml).
 3. Remove non-content blocks:
+    - `script`, `style`, navigation, footers, edit links
 
-   * `script`, `style`, navigation, footers, edit links
 4. Preserve document structure:
-
-   * headings `h1–h6` → section nodes
-   * `p` paragraphs
-   * `ul/ol` lists (flatten with bullet markers)
-   * tables: serialize rows as `|`-delimited lines (bounded to avoid massive tables)
+    - headings `h1–h6` → section nodes
+    - `p` paragraphs
+    - `ul/ol` lists (flatten with bullet markers)
+    - tables: serialize rows as `|`-delimited lines (bounded to avoid massive tables)
 
 #### 4.2.2 NQ Cleaning Pseudocode
 
@@ -288,25 +302,23 @@ def clean_nq_html(html):
     return doc
 ```
 
-
 ### 4.3 WikiWhy (Title-Based Lookups + Contextual Breadth)
 
 **Problem:** WikiWhy provides a title; the answer may require adjacent context (linked pages, broader causal background).
 
 #### 4.3.1 Base Retrieval
 
-* Fetch the Wikipedia page for the provided `title`.
-* Also fetch **redirect target** if title resolves to redirect.
+- Fetch the Wikipedia page for the provided `title`.
+- Also fetch **redirect target** if title resolves to redirect.
 
 #### 4.3.2 Contextual Breadth (bounded)
 
 To support “why/how” causal questions:
 
-* Add up to `B` linked pages from:
-
-  1. **Lead section outgoing links** (high signal)
-  2. **Infobox entity fields** (if extractable via HTML)
-  3. “History”, “Background”, “Causes”, “Aftermath” subpages if present as separate pages
+- Add up to `B` linked pages from:
+    1. **Lead section outgoing links** (high signal)
+    2. **Infobox entity fields** (if extractable via HTML)
+    3. “History”, “Background”, “Causes”, “Aftermath” subpages if present as separate pages
 
 **Fairness constraint:** Same hop/budget mechanism as ComplexTempQA; WikiWhy does not get extra pages—only different seeding.
 
@@ -330,6 +342,23 @@ def ingest_wikiwhy(example, budgets):
     return fetch_wikipedia_docs(pages)
 ```
 
+### 4.4 HotPotQA (Supporting Facts → Wikipedia Pages Only)
+
+**Problem:** HotPotQA provides `supporting_facts.title` — exactly 2 Wikipedia page titles that contain the answer evidence. No expansion is needed; the dataset already specifies the gold documents.
+
+#### 4.4.1 Base Retrieval
+
+- For each question, read `supporting_facts.title` (a list of 2 strings).
+- Fetch each Wikipedia page via the API (cached in docstore).
+- No outgoing-link or list-page expansion; HotPotQA uses only the supporting pages.
+
+#### 4.4.2 HotPotQA Ingestion Pseudocode
+
+```python
+def ingest_hotpotqa(example, budgets):
+    titles = unique(example.supporting_facts["title"])
+    return fetch_wikipedia_docs(titles)  # cached + deduped
+```
 
 ## 5) Unified Enrichment Layer (Applied to All Docs)
 
@@ -339,21 +368,20 @@ def ingest_wikiwhy(example, budgets):
 
 #### 5.1.1 Supported Patterns (examples)
 
-* Year: `\b(1[6-9]\d{2}|20\d{2}|2100)\b`
-* Month Day, Year: `\b(Jan(uary)?|...)\s+\d{1,2},\s+(19\d{2}|20\d{2})\b`
-* Year ranges: `\b(19\d{2}|20\d{2})\s*(–|-|to)\s*(19\d{2}|20\d{2})\b`
-* Decades/centuries (optional, conservative mapping):
-
-  * `1990s` → expand to [1990..1999] (store as range)
-  * `21st century` → skip unless you explicitly want coarse ranges (recommend: skip to avoid noise)
+- Year: `\b(1[6-9]\d{2}|20\d{2}|2100)\b`
+- Month Day, Year: `\b(Jan(uary)?|...)\s+\d{1,2},\s+(19\d{2}|20\d{2})\b`
+- Year ranges: `\b(19\d{2}|20\d{2})\s*(–|-|to)\s*(19\d{2}|20\d{2})\b`
+- Decades/centuries (optional, conservative mapping):
+    - `1990s` → expand to [1990..1999] (store as range)
+    - `21st century` → skip unless you explicitly want coarse ranges (recommend: skip to avoid noise)
 
 #### 5.1.2 Chunk-level Aggregation
 
 For each chunk:
 
-* Extract all matched years (including expanded ranges with cap, e.g., max 15 years).
-* `year_min/max` from extracted set
-* `temporal_density = (#year_mentions) / (#tokens)` (or per 1k tokens)
+- Extract all matched years (including expanded ranges with cap, e.g., max 15 years).
+- `year_min/max` from extracted set
+- `temporal_density = (#year_mentions) / (#tokens)` (or per 1k tokens)
 
 #### 5.1.3 Date Extraction Pseudocode
 
@@ -375,30 +403,20 @@ def extract_years(text, max_range_expand=15):
     return sorted(years)
 ```
 
-**Why this matters:** Temporal RAG relies on metadata filtering; without robust year signals, it degenerates into Dense RAG with extra steps. 
-
+**Why this matters:** Temporal RAG relies on metadata filtering; without robust year signals, it degenerates into Dense RAG with extra steps.
 
 ### 5.2 Entity & Relation Extraction Policy (GraphRAG Join-Key Reliability)
 
-**Goal:** GraphRAG success depends on matching query entities to corpus entities. Surface-form mismatch (“U.S.” vs “United States”) can collapse GraphRAG’s recall; we must normalize entities consistently across all sources. 
+**Goal:** GraphRAG success depends on matching query entities to corpus entities. Surface-form mismatch (“U.S.” vs “United States”) can collapse GraphRAG’s recall; we must normalize entities consistently across all sources.
 
-#### 5.2.1 Extraction (Entities)
+#### 5.2.1 LLM Information Extraction (Pipeline Default)
 
-* Run spaCy NER over **chunk text** (and later over queries at retrieval time).
-* Keep entity types: `PERSON`, `ORG`, `GPE`, `LOC`, `WORK_OF_ART`, `EVENT` (configurable).
+- A single LLM call per chunk extracts **both** entities and triples via the Batch API.
+- Wikipedia titles for fetched pages are pre-scanned with FlashText to pass a per-chunk **seed list** into the prompt; the LLM anchors to these when possible but may add new entities.
+- Output: `metadata.entities` and `metadata.relations` with consistent join keys.
+- Implemented by `scripts/corpus/run_llm_ie_batch.py` (submit → wait → collect → replace corpus).
 
-#### 5.2.2 Relation Extraction (Semantic Triples)
-
-**Goal:** Replace shallow “co-mentions” with explicit directed relations to support multi-hop reasoning.
-
-* Run a lightweight Relation Extraction (RE) model over each chunk to extract triples \((subject, predicate, object)\).
-* Normalize `subject` and `object` using the same entity normalization policy (below).
-* Store triples in chunk metadata as `relations` (for auditability) and use them to build directed semantic edges in the graph.
-* Example models:
-  * `Babelscape/rebel-large` (transformers-based RE)
-  * GLiNER relation models (spaCy pipeline integration, if preferred)
-
-#### 5.2.3 Normalization (deterministic)
+#### 5.2.2 Normalization (deterministic)
 
 Apply the same function everywhere:
 
@@ -407,24 +425,23 @@ Apply the same function everywhere:
 3. Collapse whitespace
 4. Remove possessives: `"obama's" → "obama"`
 5. Alias map (small, curated + auto-mined):
-
-   * curated: `{ "u.s.": "united states", "us": "united states", "uk": "united kingdom" }`
-   * auto-mined from Wikipedia redirects (when available from fetched pages)
+    - curated: `{ "u.s.": "united states", "us": "united states", "uk": "united kingdom" }`
+    - auto-mined from Wikipedia redirects (when available from fetched pages)
 
 **Optional (recommended if available without heavy infra):**
 
-* If a chunk originates from a resolved Wikipedia page with a known QID, tag that page-title entity with `qid` and propagate.
+- If a chunk originates from a resolved Wikipedia page with a known QID, tag that page-title entity with `qid` and propagate.
 
-#### 5.2.4 Entity Lexicon Build
+#### 5.2.3 Entity Lexicon Build
 
 Create `entity_lexicon.parquet`:
 
-* `norm` (primary key)
-* `surface_forms` (top-k frequent)
-* `qid_candidates` (if any)
-* `df` document frequency (for downweighting extremely common entities)
+- `norm` (primary key)
+- `surface_forms` (top-k frequent)
+- `qid_candidates` (if any)
+- `df` document frequency (for downweighting extremely common entities)
 
-#### 5.2.5 Entity Policy Pseudocode
+#### 5.2.4 Entity Policy Pseudocode
 
 ```python
 def norm_entity(s, alias_map):
@@ -448,74 +465,50 @@ def extract_entities_spacy(text, nlp, alias_map):
     return dedupe_by_norm(ents)
 ```
 
-
-## 6) Chunking Strategy (500–1000 tokens + overlap)
+## 6) Chunking Strategy (500–800 tokens + overlap)
 
 ### 6.1 Requirements
 
-* Chunk size: **500–1000 tokens**
-* Overlap: **~10–15%** (e.g., 100–150 tokens)
-* Preserve section boundaries where possible (don’t merge unrelated sections)
+- Chunk size: **500–800 tokens** (tiktoken cl100k_base; aligns with OpenAI models)
+- Overlap: **~10–15%** (e.g., 100 tokens)
+- Preserve section boundaries where possible (don’t merge unrelated sections)
 
 ### 6.2 Algorithm
 
 1. Split doc into blocks (paragraph/list/table) with section paths.
-2. Accumulate blocks until token budget reached.
-3. When exceeding:
+2. For each block, count tokens via tiktoken (cl100k_base).
+3. Accumulate blocks until token budget reached.
+4. When exceeding:
+    - finalize chunk
+    - start next chunk with overlap tail (token-based)
+5. If a single block exceeds `max_tokens`, flush buffer and split the block into overlapping sub-chunks.
 
-   * finalize chunk
-   * start next chunk with overlap tail (token-based, not block-based if needed)
+### 6.3 Implementation
 
-### 6.3 Chunking Pseudocode
-
-```python
-def chunk_doc(blocks, tok, min_t=500, max_t=1000, overlap_t=120):
-    chunks = []
-    buf, buf_tokens = [], 0
-
-    for b in blocks:
-        t = tok.count(b.text)
-        if buf_tokens + t > max_t and buf_tokens >= min_t:
-            chunk_text = join_blocks(buf)
-            chunks.append(make_chunk(chunk_text, buf))
-            tail = tok.tail(chunk_text, overlap_t)
-            buf = [Block(text=tail, section_path=buf[-1].section_path)]
-            buf_tokens = tok.count(tail)
-
-        buf.append(b)
-        buf_tokens += t
-
-    if buf:
-        chunks.append(make_chunk(join_blocks(buf), buf))
-
-    return chunks
-```
-
+Implemented in `src/raqr/data/chunking.py`. Uses `chunk_blocks(blocks, min_tokens=500, max_tokens=800, overlap_tokens=100)` with tiktoken cl100k_base. Chunk limits are configurable via `--chunk-min-tokens`, `--chunk-max-tokens`, `--chunk-overlap-tokens` or env vars.
 
 ## 7) Indexing Artifacts
 
 ### 7.1 FAISS Vector Index (Dense + Temporal Candidate Pool)
 
-* Embed every chunk using a single embedding model (e.g., `all-MiniLM-L6-v2`) for consistency. 
-* Store:
+- Embed every chunk using a single embedding model (e.g., `all-MiniLM-L6-v2`) for consistency.
+- Store:
+    - FAISS index (vectors)
+    - Separate metadata table keyed by FAISS row id → `chunk_id`, `year_min/max`, `years`, etc.
 
-  * FAISS index (vectors)
-  * Separate metadata table keyed by FAISS row id → `chunk_id`, `year_min/max`, `years`, etc.
-
-**Temporal RAG compatibility:** retrieve top-N (N≫k) then filter by year; refill from deeper ranks as needed. 
+**Temporal RAG compatibility:** retrieve top-N (N≫k) then filter by year; refill from deeper ranks as needed.
 
 ### 7.2 NetworkX Relationship Graph (GraphRAG)
 
-Graph schema (minimum viable): 
+Graph schema (minimum viable):
 
-* Nodes:
+- Nodes:
+    - `E:{norm_entity}` (Entity nodes)
+    - `C:{chunk_id}` (Chunk nodes)
 
-  * `E:{norm_entity}` (Entity nodes)
-  * `C:{chunk_id}` (Chunk nodes)
-* Edges:
-
-  * **Semantic edges (primary):** `E --predicate--> E` from extracted triples \((subject, predicate, object)\)
-  * **Provenance edges:** `E --> C` (`appears_in`) if entity occurs in chunk (optionally weighted by frequency)
+- Edges:
+    - **Semantic edges (primary):** `E --predicate--> E` from extracted triples \((subject, predicate, object)\)
+    - **Provenance edges:** `E --> C` (`appears_in`) if entity occurs in chunk (optionally weighted by frequency)
 
 **Build pseudocode**
 
@@ -542,32 +535,30 @@ def build_graph(chunks):
     return G
 ```
 
-
 ## 8) Required Quality Gates (Prevents “Simplicity Bias” Collapse)
 
-RAQR’s Oracle labels will otherwise default to Dense RAG if Graph/Temporal lack evidence or linkage. The following diagnostics must be computed after ingestion and before Oracle runs. This aligns with the project’s controlled, oracle-based methodology and the need to interpret Graph underperformance as either *reasoning* failure or *matching* failure.   
+RAQR’s Oracle labels will otherwise default to Dense RAG if Graph/Temporal lack evidence or linkage. The following diagnostics must be computed after ingestion and before Oracle runs. This aligns with the project’s controlled, oracle-based methodology and the need to interpret Graph underperformance as either _reasoning_ failure or _matching_ failure.
 
 ### 8.1 Coverage Gate (Answer Evidence Presence)
 
 For each question:
 
-* Verify that at least one ingested doc corresponds to:
+- Verify that at least one ingested doc corresponds to:
+    - the answer entity page (for QID/title sources), **or**
+    - an equivalent page containing answer string(s) (for NQ)
 
-  * the answer entity page (for QID/title sources), **or**
-  * an equivalent page containing answer string(s) (for NQ)
-* If missing, allow a **single bounded fallback fetch**:
-
-  * ComplexTempQA: re-resolve `answer_entity` + redirects
-  * WikiWhy: follow redirect + disambiguation pick (first non-disambig)
-  * NQ: fetch the canonical Wikipedia page for the NQ topic if present
+- If missing, allow a **single bounded fallback fetch**:
+    - ComplexTempQA: re-resolve `answer_entity` + redirects
+    - WikiWhy: follow redirect + disambiguation pick (first non-disambig)
+    - NQ: fetch the canonical Wikipedia page for the NQ topic if present
 
 ### 8.2 Temporal Gate (Year Signal Adequacy)
 
 Compute:
 
-* `% chunks with ≥1 year`
-* Distribution of `temporal_density`
-* For queries with explicit year/range terms: `% with at least one candidate chunk overlapping year range`
+- `% chunks with ≥1 year`
+- Distribution of `temporal_density`
+- For queries with explicit year/range terms: `% with at least one candidate chunk overlapping year range`
 
 Failing this gate means Temporal RAG cannot win on merit.
 
@@ -575,11 +566,10 @@ Failing this gate means Temporal RAG cannot win on merit.
 
 Compute:
 
-* “% of queries with ≥1 entity match in the graph (post-normalization)”  
-* Average entities per chunk and per query
+- “% of queries with ≥1 entity match in the graph (post-normalization)”
+- Average entities per chunk and per query
 
 Low match rate indicates normalization/aliasing issues, not that Graph reasoning is unnecessary.
-
 
 ## 9) Rationale for Key Design Decisions (Why These Choices)
 
@@ -589,48 +579,47 @@ Without list/timeline pages, many temporal questions reduce to sparse mentions s
 
 ### 9.2 Why country expansion is necessary
 
-Country pages and their history/politics sections act as *connectors* across events, offices, conflicts, and periods. They are “low-cost hubs” that improve both:
+Country pages and their history/politics sections act as _connectors_ across events, offices, conflicts, and periods. They are “low-cost hubs” that improve both:
 
-* Temporal reasoning (periodization, administrations)
-* Graph traversal (shared geopolitical entities)
+- Temporal reasoning (periodization, administrations)
+- Graph traversal (shared geopolitical entities)
 
 ### 9.3 Why entity normalization is non-negotiable
 
-GraphRAG’s failure mode is often *string mismatch*, not reasoning failure. A unified normalization policy (plus aliases/redirects) ensures GraphRAG has a fair chance to retrieve the right chunk neighborhood. 
+GraphRAG’s failure mode is often _string mismatch_, not reasoning failure. A unified normalization policy (plus aliases/redirects) ensures GraphRAG has a fair chance to retrieve the right chunk neighbourhood.
 
 ### 9.4 Why unified enrichment prevents dataset favoritism
 
-If only ComplexTempQA gets QID-based entity IDs, GraphRAG becomes biased toward that dataset. By extracting entities and years uniformly from *all* ingested text, every dataset contributes equally to graph and temporal signals.
-
+If only ComplexTempQA gets QID-based entity IDs, GraphRAG becomes biased toward that dataset. By extracting entities and years uniformly from _all_ ingested text, every dataset contributes equally to graph and temporal signals.
 
 ## 10) Automation, Caching, and Reproducibility
 
 ### 10.1 Caching (Efficiency without Wikipedia dumps)
 
-* Cache fetched Wikipedia pages by `page_id + revision_id`.
-* Cache cleaned text + extracted anchors.
-* Dedupe titles globally; many questions point to the same hubs.
+- Cache fetched Wikipedia pages by `page_id + revision_id`.
+- Cache cleaned text + extracted anchors.
+- Dedupe titles globally; many questions point to the same hubs.
 
 ### 10.2 Determinism Controls
 
-* Fixed random seeds for sampling and any stochastic steps. 
-* Store corpus build config hash inside artifact metadata:
-
-  * tokenization version
-  * chunking parameters
-  * regex versions
-  * alias map version
+- Fixed random seeds for sampling and any stochastic steps.
+- Store corpus build config hash inside artifact metadata:
+    - tokenization version
+    - chunking parameters
+    - regex versions
+    - alias map version
 
 ### 10.3 Scripted Stages (recommended layout)
 
-Matches the project’s staged workflow separation. 
+Matches the project’s staged workflow separation.
 
-* `scripts/01_build_corpus.py` → produces corpus + indexes
-* `scripts/02_run_oracle.py` → produces oracle labels (out of scope here)
-* `scripts/03_train_router.py`
-* `scripts/04_evaluate.py`
+- `scripts/01_build_corpus.py` → produces corpus + indexes
+- `scripts/02_run_oracle.py` → produces oracle labels (out of scope here)
+- `scripts/03_train_router.py`
+- `scripts/04_evaluate.py`
 
 ## 12) Deferred Enhancements (Not Implemented Yet)
+
 The following items are intentionally deferred for Phase 1 to keep the pipeline
 simple and reliable. Each item is valuable and can be added later without
 changing the benchmark generation logic.
@@ -648,7 +637,6 @@ changing the benchmark generation logic.
    checks for explicitly temporal questions and (b) per‑query entity‑match rates
    against the graph to distinguish normalization failures from reasoning failures.
 
-
 ## 11) End-to-End Build Skeleton (Putting It All Together)
 
 ```python
@@ -661,6 +649,8 @@ def build_unified_corpus(samples):
             docs = ingest_complextempqa(ex, budgets)
         elif ex.source == "wikiwhy":
             docs = ingest_wikiwhy(ex, budgets)
+        elif ex.source == "hotpotqa":
+            docs = ingest_hotpotqa(ex, budgets)  # supporting_facts.title only
         elif ex.source == "nq":
             docs = ingest_nq(ex, budgets)  # clean HTML, optionally add linked pages within same budget
         else:

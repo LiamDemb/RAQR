@@ -9,8 +9,7 @@ The architecture follows a strict **Interface-Based Design**: all Retrieval Stra
 For rigorous evaluation, strategies do **not** return only a string. They return a small structured object (e.g., `StrategyResult`) containing:
 
 - `answer: str`
-- `contexts: list[DocumentChunk]` (or IDs/references)
-- `scores: list[float]` (aligned with `contexts`)
+- `context_scores: List[Tuple[str, float]]` (context text, score pairs)
 - `latency_ms: dict` (at minimum: `retrieval`, `generation`, `total`)
 
 ### System Diagram (Conceptual)
@@ -96,7 +95,7 @@ This approach keeps the project easy to run for assessors while remaining flexib
 
 - **Deep Learning Framework:** `PyTorch` (v2.0+).
 - **Transformer Library:** `Hugging Face Transformers` (for loading/fine-tuning DistilBERT).
-- **Relation Extraction:** `transformers` (e.g., REBEL) and/or `gliner` (relation models) for extracting semantic triples during ingestion.
+- **Entity & Relation Extraction:** LLM (OpenAI) one-pass extraction via Batch API.
 - **Classical ML:** `Scikit-Learn` (for metrics, skewness calc, SVM baselines if needed).
 
 ### LLM Interface
@@ -182,12 +181,12 @@ Responsible for ingesting datasets and normalizing them into a standard schema.
     }
     ```
 
-### B. The Retrieval Strategies (`src/strategies`)
+### B. The Retrieval Strategies (`src/raqr/strategies`)
 
 Each strategy class inherits from `BaseStrategy`. There are **3** concrete implementations.
 
-1.  **`DenseStrategy`:** Standard LangChain `VectorStoreRetriever`.
-2.  **`GraphStrategy`:** Relation-aware traversal using **predicate edges** (Subject-Predicate-Object triples) and **provenance edges** (Entity $\rightarrow$ Chunk). Entity & relation extraction $\rightarrow$ `NetworkX` triple traversal (1-hop) $\rightarrow$ resolve to evidence chunks via provenance edges.
+1.  **`DenseStrategy`:** Custom FAISS indexing (`FaissIndexStore`) + `SentenceTransformersEmbedder`; maps row IDs to chunk texts via `vector_meta.parquet`.
+2.  **`GraphStrategy`:** Relation-aware traversal using **predicate edges** (Subject-Predicate-Object triples) and **provenance edges** (Entity $\rightarrow$ Chunk). Query entity extraction uses an **LLM call** (default) to extract entities from the question; optionally **vector similarity** against an entity index bridges alternate phrasings (e.g. "Einstein" $\rightarrow$ "Albert Einstein"). NetworkX triple traversal (1-hop) resolves evidence chunks via provenance edges. Candidate hop and path relevance scoring is managed via a configurable `ScoringConfig` (`local_pred_weight`, `bundle_pred_weight`, `length_penalty`).
 3.  **`TemporalStrategy`:** FAISS candidate pool (vector search) + explicit year metadata filter. Date extraction (Regex/LLM) $\rightarrow$ retrieve deeper candidate set $\rightarrow$ filter by `year` metadata (refill from deeper ranks until \(k\) contexts). **No temporal KG;** Temporal RAG is metadata-filtered dense retrieval only.
 
 ### C. The Probe Module (`src/probe`)
@@ -241,7 +240,7 @@ The codebase is organized to run in **4 sequential stages**:
 - **Action:**
     1.  Loops through the Benchmark Dataset.
     2.  Runs **ALL 3** strategies for every question.
-    3.  Evaluates answers using `F1 Score` vs Gold Answer.
+    3.  Evaluates answers using **LLM-as-judge** for semantic correctness.
     4.  Selects the winner using a **margin-based simplicity bias** rule (\(\delta\)) with deterministic tie-break: **Dense > Temporal > Graph**.
 - **Artifacts:** `data/training/labeled_train.jsonl`, `data/training/labeled_dev.jsonl` (This is your training data).
 

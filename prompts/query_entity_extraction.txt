@@ -1,0 +1,21 @@
+Extract the key entities (people, places, organizations, events, works, concepts) that the user is asking about in this question.
+
+TASK: Return a JSON list of entity strings. Use the exact phrasing from the question when possible. Keep entities atomic and short.
+
+RULES:
+- Extract only entities explicitly mentioned or clearly implied.
+- Do not infer or add entities not in the question.
+- Return the shortest substring that is the entity name itself.
+- Do not include surrounding role, relationship, or type words.
+- Return an empty list if no clear entities.
+
+SOME COMMON PATTERNS:
+- "<role> of <ENTITY>" -> ["<ENTITY>"]
+- "<role> of <WORK_OF_ART> (<details>)" -> ["<WORK_OF_ART>"]
+
+HINT: Entities are usually capitalised and not in brackets. Words like "director", "film", (Film) etc. are not usually entities.
+
+QUESTION:
+{query}
+
+Output a JSON array of entity strings, e.g. ["Albert Einstein", "Germany"].

@@ -49,7 +49,7 @@ This research contains a two-dimensional ablation study:
 ### Input Signals
 
 - **Q-Emb:** DistilBERT [CLS] embedding (768 dims) of the query
-- **Q-Feat:** Engineered features (length/token count, entity density via spaCy, complexity keywords; optional syntax depth)
+- **Q-Feat:** Engineered features (length/token count, entity density from query entity extraction, complexity keywords; optional syntax depth)
 - **Probe:** Top-10 Dense retrieval signals—max score, skewness, semantic dispersion (alias: semantic distance)
 - **Combined:** The router uses Q-Emb + Q-Feat + Probe together
 
@@ -72,4 +72,4 @@ This research contains a two-dimensional ablation study:
 
 - **A Systematic Evaluation of Information Sources:** Determining if query semantics or retrieval metadata is the superior signal for RAG orchestration.
 - **Efficiency Frontier Analysis:** Demonstrating that lightweight classifiers can achieve near-SOTA accuracy at a fraction of the cost of LLM-based routing.
-- **Impact & Regret Taxonomy:** A quantitative analysis of **Routing Regret**—defined as \(\text{regret} = \text{oracleF1} - \text{selectedF1}\), i.e. the F1 loss incurred when the router selects a strategy different from the Oracle’s best. We identify which reasoning mismatches are "forgivable" (marginal performance loss) versus "fatal" (severe system failure), providing a severity taxonomy and a safety-first roadmap for RAG design.
+- **Impact & Regret Taxonomy:** A quantitative analysis of **Routing Regret**—defined as $\text{regret} = \text{oracle}_\text{F1} - \text{selected}_\text{F1}$, i.e. the F1 loss incurred when the router selects a strategy different from the Oracle’s best. We identify which reasoning mismatches are "forgivable" (marginal performance loss) versus "fatal" (severe system failure), providing a severity taxonomy and a safety-first roadmap for RAG design.

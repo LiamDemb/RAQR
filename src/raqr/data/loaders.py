@@ -3,19 +3,12 @@ from __future__ import annotations
 import csv
 import json
 import logging
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
-from .schemas import BenchmarkItem, Document, sha256_text
+from .schemas import BenchmarkItem, sha256_text
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class LoaderRecord:
-    document: Document
-    benchmark_item: BenchmarkItem
 
 
 def _as_list(value: Any) -> List[str]:
@@ -36,20 +29,52 @@ def _first_non_empty(*values: Any) -> Optional[str]:
     return None
 
 
-def _strip_html(text: str) -> str:
-    output: List[str] = []
-    inside_tag = False
-    for ch in text:
-        if ch == "<":
-            inside_tag = True
-            continue
-        if ch == ">":
-            inside_tag = False
-            continue
-        if not inside_tag:
-            output.append(ch)
-    return "".join(output)
+def _has_context_nq(row: Dict[str, Any]) -> bool:
+    """Check if row has context from any NQ-style field."""
+    doc_block = row.get("document")
+    doc_html = doc_block.get("html") if isinstance(doc_block, dict) else None
+    tokens = doc_block.get("tokens") if isinstance(doc_block, dict) else None
+    if _first_non_empty(
+        row.get("context"),
+        row.get("document_text"),
+        row.get("document") if isinstance(row.get("document"), str) else None,
+        row.get("paragraph"),
+    ):
+        return True
+    if _first_non_empty(row.get("document_html"), doc_html):
+        return True
+    if isinstance(tokens, list):
+        for t in tokens:
+            if isinstance(t, dict) and t.get("token") and not t.get("is_html"):
+                return True
+    return False
 
+
+def _has_context_complextempqa(row: Dict[str, Any]) -> bool:
+    """Check if row has context from any ComplexTempQA-style field."""
+    if _first_non_empty(
+        row.get("context"),
+        row.get("passage"),
+        row.get("document") if isinstance(row.get("document"), str) else None,
+        row.get("paragraph"),
+    ):
+        return True
+    if row.get("question") and (row.get("answers") or row.get("answer")):
+        return True
+    return False
+
+
+def _has_context_wikiwhy(row: Dict[str, Any]) -> bool:
+    """Check if row has context from any WikiWhy-style field."""
+    return bool(
+        _first_non_empty(
+            row.get("context"),
+            row.get("passage"),
+            row.get("paragraph"),
+            row.get("rationale"),
+            row.get("ctx"),
+        )
+    )
 
 def _iter_json_records(path: Path) -> Iterator[Dict[str, Any]]:
     if path.suffix == ".jsonl":
@@ -79,7 +104,7 @@ def load_nq(
     path: str,
     dataset_version: Optional[str] = None,
     max_rows: Optional[int] = None,
-) -> Iterator[LoaderRecord]:
+) -> Iterator[BenchmarkItem]:
     """Load Natural Questions style data from JSON/JSONL."""
     source = "nq"
     count = 0
@@ -130,50 +155,10 @@ def load_nq(
                         answers.append(short_answer.strip())
             answers = [a for a in answers if a]
 
-        document_block = row.get("document")
-        document_html = None
-        document_title = None
-        tokens = None
-        if isinstance(document_block, dict):
-            document_html = document_block.get("html")
-            document_title = document_block.get("title")
-            tokens = document_block.get("tokens")
-
-        context = _first_non_empty(
-            row.get("context"),
-            row.get("document_text"),
-            row.get("document"),
-            row.get("paragraph"),
-        )
-        if not context and "document_html" in row:
-            context = _strip_html(str(row.get("document_html", "")))
-        if not context and document_html:
-            context = _strip_html(str(document_html))
-        if not context and isinstance(tokens, list):
-            token_text = [
-                token.get("token", "")
-                for token in tokens
-                if isinstance(token, dict) and not token.get("is_html", False)
-            ]
-            context = " ".join([t for t in token_text if t.strip()])
-
-        if not context or not answers:
+        if not _has_context_nq(row) or not answers:
             continue
 
-        title = _first_non_empty(
-            row.get("document_title"),
-            row.get("title"),
-            document_title,
-        )
-        timestamp = _first_non_empty(row.get("timestamp"), row.get("date"))
-        metadata = {"source": source}
-        if title:
-            metadata["title"] = title
-        if timestamp:
-            metadata["timestamp"] = timestamp
-
-        document = Document(id=sha256_text(context), content=context, metadata=metadata)
-        benchmark_item = BenchmarkItem(
+        yield BenchmarkItem(
             question_id=sha256_text(question),
             question=question,
             gold_answers=answers,
@@ -181,7 +166,6 @@ def load_nq(
             split="",
             dataset_version=dataset_version,
         )
-        yield LoaderRecord(document=document, benchmark_item=benchmark_item)
         count += 1
         if max_rows and count >= max_rows:
             break
@@ -191,37 +175,16 @@ def load_complextempqa(
     path: str,
     dataset_version: Optional[str] = None,
     max_rows: Optional[int] = None,
-) -> Iterator[LoaderRecord]:
+) -> Iterator[BenchmarkItem]:
     source = "complextempqa"
     count = 0
     for row in _iter_json_records(Path(path)):
         question = _first_non_empty(row.get("question"), row.get("query"))
         answers = _as_list(row.get("answers") or row.get("answer"))
-        context = _first_non_empty(
-            row.get("context"),
-            row.get("passage"),
-            row.get("document"),
-            row.get("paragraph"),
-        )
-        if not context and question and answers:
-            context = f"{question} {' '.join(answers)}".strip()
-        if not question or not answers or not context:
+        if not question or not answers or not _has_context_complextempqa(row):
             continue
-        title = _first_non_empty(row.get("title"))
-        timestamp = _first_non_empty(
-            row.get("timestamp"),
-            row.get("date"),
-            row.get("year"),
-        )
-        metadata = {"source": source}
-        if "context" not in row:
-            metadata["context_fallback"] = True
-        if title:
-            metadata["title"] = title
-        if timestamp:
-            metadata["timestamp"] = timestamp
-        document = Document(id=sha256_text(context), content=context, metadata=metadata)
-        benchmark_item = BenchmarkItem(
+
+        yield BenchmarkItem(
             question_id=sha256_text(question),
             question=question,
             gold_answers=answers,
@@ -229,7 +192,6 @@ def load_complextempqa(
             split="",
             dataset_version=dataset_version,
         )
-        yield LoaderRecord(document=document, benchmark_item=benchmark_item)
         count += 1
         if max_rows and count >= max_rows:
             break
@@ -239,7 +201,7 @@ def load_wikiwhy(
     path: str,
     dataset_version: Optional[str] = None,
     max_rows: Optional[int] = None,
-) -> Iterator[LoaderRecord]:
+) -> Iterator[BenchmarkItem]:
     source = "wikiwhy"
     count = 0
     path_obj = Path(path)
@@ -249,25 +211,9 @@ def load_wikiwhy(
             for row in reader:
                 question = _first_non_empty(row.get("question"), row.get("query"))
                 answers = _as_list(row.get("answer") or row.get("answers"))
-                context = _first_non_empty(
-                    row.get("context"),
-                    row.get("passage"),
-                    row.get("paragraph"),
-                    row.get("rationale"),
-                )
-                if not question or not answers or not context:
+                if not question or not answers or not _has_context_wikiwhy(row):
                     continue
-                title = _first_non_empty(row.get("title"))
-                timestamp = _first_non_empty(row.get("timestamp"), row.get("date"))
-                metadata = {"source": source}
-                if title:
-                    metadata["title"] = title
-                if timestamp:
-                    metadata["timestamp"] = timestamp
-                document = Document(
-                    id=sha256_text(context), content=context, metadata=metadata
-                )
-                benchmark_item = BenchmarkItem(
+                yield BenchmarkItem(
                     question_id=sha256_text(question),
                     question=question,
                     gold_answers=answers,
@@ -275,7 +221,6 @@ def load_wikiwhy(
                     split="",
                     dataset_version=dataset_version,
                 )
-                yield LoaderRecord(document=document, benchmark_item=benchmark_item)
                 count += 1
                 if max_rows and count >= max_rows:
                     break
@@ -288,26 +233,9 @@ def load_wikiwhy(
                 or row.get("cause")
                 or row.get("effect")
             )
-            context = _first_non_empty(
-                row.get("ctx"),
-                row.get("context"),
-                row.get("passage"),
-                row.get("paragraph"),
-                row.get("rationale"),
-            )
-            if not question or not answers or not context:
+            if not question or not answers or not _has_context_wikiwhy(row):
                 continue
-            title = _first_non_empty(row.get("title"))
-            timestamp = _first_non_empty(row.get("timestamp"), row.get("date"))
-            metadata = {"source": source}
-            if title:
-                metadata["title"] = title
-            if timestamp:
-                metadata["timestamp"] = timestamp
-            document = Document(
-                id=sha256_text(context), content=context, metadata=metadata
-            )
-            benchmark_item = BenchmarkItem(
+            yield BenchmarkItem(
                 question_id=sha256_text(question),
                 question=question,
                 gold_answers=answers,
@@ -315,7 +243,38 @@ def load_wikiwhy(
                 split="",
                 dataset_version=dataset_version,
             )
-            yield LoaderRecord(document=document, benchmark_item=benchmark_item)
             count += 1
             if max_rows and count >= max_rows:
                 break
+
+
+def load_hotpotqa(
+    path: str,
+    dataset_version: Optional[str] = None,
+    max_rows: Optional[int] = None,
+) -> Iterator[BenchmarkItem]:
+    """Load HotPotQA data from JSON/JSONL."""
+    source = "hotpotqa"
+    count = 0
+    for row in _iter_json_records(Path(path)):
+        question = row.get("question")
+        answers = _as_list(row.get("answer"))
+        if not question or not answers:
+            continue
+
+        supporting_facts = row.get("supporting_facts")
+        if not supporting_facts:
+            continue
+        wiki_articles: List[str] = supporting_facts["title"]
+
+        yield BenchmarkItem(
+            question_id=sha256_text(question),
+            question=question,
+            gold_answers=answers,
+            dataset_source=source,
+            split="",
+            dataset_version=dataset_version,
+        )
+        count += 1
+        if max_rows and count >= max_rows:
+            break

@@ -222,6 +222,25 @@ def ingest_wikiwhy(
     return _dedupe_docs(docs)
 
 
+def ingest_hotpotqa(
+    sample: dict,
+    budgets: Budgets,
+    docstore: DocStore,
+    wiki: WikipediaClient,
+) -> List[RawDoc]:
+    """Fetch only the supporting Wikipedia pages for a HotPotQA question."""
+    source = "hotpotqa"
+    dataset_origin = "hotpotqa"
+    supporting_facts = sample.get("supporting_facts") or {}
+    titles = list(dict.fromkeys(str(t).strip() for t in supporting_facts["title"] if str(t).strip()))
+
+    docs = [
+        _cached_wiki_page(title, source, dataset_origin, docstore, wiki)
+        for title in titles
+    ]
+    return _dedupe_docs(docs)
+
+
 def ingest_nq(
     sample: dict,
     budgets: Budgets,
@@ -249,12 +268,4 @@ def ingest_nq(
         )
     ]
 
-    if title and budgets.max_pages_per_question > 1:
-        outgoing = wiki.fetch_html(title).outgoing_titles
-        for out_title in outgoing[: budgets.max_outgoing]:
-            if len(docs) >= budgets.max_pages_per_question:
-                break
-            docs.append(
-                _cached_wiki_page(out_title, source, dataset_origin, docstore, wiki)
-            )
     return _dedupe_docs(docs)
