@@ -18,6 +18,12 @@ from pathlib import Path
 # Generator prompt (used by DenseStrategy and GraphStrategy)
 # ---------------------------------------------------------------------------
 
+# System message when using template-style prompts with {context}/{question} placeholders.
+# Used by generator.py and raqr.generation.batch for parity.
+GENERATOR_SYSTEM_MESSAGE = (
+    "You are a strict QA system. Answer based ONLY on the provided context."
+)
+
 BASE_PROMPT_OLD = (
     "You are a strict factual answering system. Answer the question based ONLY on the provided context."
     "CRITICAL INSTRUCTIONS:"

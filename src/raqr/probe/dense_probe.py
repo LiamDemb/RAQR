@@ -10,12 +10,14 @@ import faiss
 import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
+from numpy.typing import NDArray
+from scipy.stats import skew
 
 from .signals import ProbeSignals
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TOP_K = 10
+DEFAULT_TOP_K = 30
 DEFAULT_MODEL_NAME = "all-MiniLM-L6-v2"
 
 
@@ -29,20 +31,22 @@ def _compute_semantic_dispersion(
     dispersion = 1 - cos(query, centroid(retrieved))
     Requires index to support reconstruct(). If not, returns NaN and logs.
     """
+
+    if len(row_ids) == 0:
+        return float("nan")
+
     try:
         vectors = np.vstack([index.reconstruct(int(i)) for i in row_ids])
-    except (AttributeError, RuntimeError) as e:
-        logger.error(
-            "FAISS index does not support reconstruction; semantic_dispersion set to NaN. %s",
-            e,
-        )
-        return float("nan")
+    except Exception as e:
+        logger.error("Failed to reconstruct vectors for semantic dispersion: %s", e)
+        return np.nan
 
     centroid = vectors.mean(axis=0).astype(np.float32)
     norm = np.linalg.norm(centroid)
     if norm < 1e-10:
         return float("nan")
     centroid_norm = centroid / norm
+
     q = query_embedding.astype(np.float32).ravel()
     q_norm = np.linalg.norm(q)
     if q_norm < 1e-10:
@@ -50,6 +54,15 @@ def _compute_semantic_dispersion(
     q = q / q_norm
     sim = float(np.dot(q, centroid_norm))
     return 1.0 - sim
+
+
+def _compute_standard_deviation(scores: NDArray[np.float32]) -> float:
+    mean = float(np.mean(scores))
+    sum = 0
+    for s in scores:
+        sum += (s - mean) ** 2
+
+    return (sum / len(scores)) ** 0.5
 
 
 def run_probe(
@@ -69,7 +82,7 @@ def run_probe(
         return ProbeSignals(
             max_score=0.0,
             min_score=0.0,
-            mean_score=0.0,
+            score_sd=0.0,
             skewness=0.0,
             semantic_dispersion=float("nan"),
         )
@@ -81,7 +94,7 @@ def run_probe(
         return ProbeSignals(
             max_score=0.0,
             min_score=0.0,
-            mean_score=0.0,
+            score_sd=0.0,
             skewness=0.0,
             semantic_dispersion=float("nan"),
         )
@@ -89,15 +102,14 @@ def run_probe(
     ids = ids[valid]
     max_s = float(np.max(scores))
     min_s = float(np.min(scores))
-    mean_s = float(np.mean(scores))
-    from scipy.stats import skew
-
     skew_s = float(skew(scores)) if len(scores) > 1 else 0.0
     disp = _compute_semantic_dispersion(q_emb[0], index, ids)
+    score_sd = _compute_standard_deviation(scores)
+
     return ProbeSignals(
         max_score=max_s,
         min_score=min_s,
-        mean_score=mean_s,
+        score_sd=score_sd,
         skewness=skew_s,
         semantic_dispersion=disp,
     )
