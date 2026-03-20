@@ -60,6 +60,31 @@ def submit_batches(
         "Loaded %d samples (Test excluded: %s)", len(samples), not include_test
     )
 
+    # Load existing oracle scores to skip completed questions ──
+    existing_scores_path = output_dir / OUTPUT_FILENAME
+    completed_qids: set[str] = set()
+    if existing_scores_path.is_file():
+        with existing_scores_path.open("r", encoding="utf-8") as ef:
+            for line in ef:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                qid = row.get("question_id", "")
+                has_dense = bool(row.get("pred_dense"))
+                has_graph = bool(row.get("pred_graph"))
+                if qid and has_dense and has_graph:
+                    completed_qids.add(qid)
+        if completed_qids:
+            logger.info(
+                "Found %d already-completed questions in %s.",
+                len(completed_qids),
+                existing_scores_path,
+            )
+
     base_prompt = get_generator_prompt()
     model_id = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     recorder = BatchRecorderGenerator(
@@ -75,18 +100,40 @@ def submit_batches(
     dense.generator = recorder
     graph.generator = recorder
 
-    for idx, sample in enumerate(samples):
+    skipped = 0
+    for sample in samples:
         question = sample.get("question", "").strip()
+        qid = sample.get("question_id", "")
         if not question:
             continue
-        recorder.next_custom_id = f"{idx}_dense"
+        if qid in completed_qids:
+            skipped += 1
+            continue
+        recorder.next_custom_id = f"{qid}_dense"
         dense.retrieve_and_generate(question)
-        recorder.next_custom_id = f"{idx}_graph"
+        recorder.next_custom_id = f"{qid}_graph"
         graph.retrieve_and_generate(question)
 
+    if skipped:
+        logger.info(
+            "Skipped %d already-completed questions (%d new to process).",
+            skipped,
+            len(samples) - skipped,
+        )
+
     if not recorder.recorded_requests:
-        logger.error("No requests recorded. Check strategy retrieval.")
-        return 1
+        logger.info("All questions already answered. Nothing to submit.")
+        state = {
+            "shards": [],
+            "benchmark_path": str(benchmark_path),
+            "samples_count": len(samples),
+            "samples": samples,
+            "total_requests": 0,
+        }
+        state_path = output_dir / STATE_FILENAME
+        with state_path.open("w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        return 0
 
     logger.info(
         "Recorded %d requests. Building batch JSONL...", len(recorder.recorded_requests)
@@ -178,7 +225,8 @@ def collect_batches(state_path: Path, output_dir: Path, output_file: Optional[Pa
     """Collect strategy batch results and save to JSONL. Returns exit code."""
     import re
     
-    CUSTOM_ID_PATTERN = re.compile(r"^(\d+)_(dense|graph)$")
+    # Match "{question_id}_{strategy}" where question_id can contain any non-underscore-suffix chars
+    CUSTOM_ID_PATTERN = re.compile(r"^(.+)_(dense|graph)$")
     
     if not state_path.is_file():
         logger.error("State file not found: %s", state_path)
@@ -205,6 +253,27 @@ def collect_batches(state_path: Path, output_dir: Path, output_file: Optional[Pa
         return 1
 
     client = OpenAI(api_key=api_key)
+
+    # ── Incremental: load existing oracle scores as a baseline ──
+    existing_preds: dict[str, dict[str, str]] = {}  # qid -> {"dense": ..., "graph": ...}
+    if output_path.is_file():
+        with output_path.open("r", encoding="utf-8") as ef:
+            for line in ef:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                qid = row.get("question_id", "")
+                if qid:
+                    existing_preds[qid] = {
+                        "dense": row.get("pred_dense", ""),
+                        "graph": row.get("pred_graph", ""),
+                    }
+        if existing_preds:
+            logger.info("Loaded %d existing predictions from %s.", len(existing_preds), output_path)
 
     answers_by_id: dict[str, str] = {}
     completed = 0
@@ -245,20 +314,28 @@ def collect_batches(state_path: Path, output_dir: Path, output_file: Optional[Pa
                 completed += 1
                 answers_by_id[cid] = answer
 
-    by_idx: dict[int, dict[str, str]] = {}
+    # Group batch answers by question_id
+    by_qid: dict[str, dict[str, str]] = {}
     for cid, answer in answers_by_id.items():
         m = CUSTOM_ID_PATTERN.match(cid)
         if not m:
             continue
-        idx = int(m.group(1))
+        qid = m.group(1)
         strategy = m.group(2)
-        by_idx.setdefault(idx, {})[strategy] = answer
+        by_qid.setdefault(qid, {})[strategy] = answer
 
     logger.info("Writing %s (one line per question, pred_dense + pred_graph)...", output_path)
     with output_path.open("w", encoding="utf-8") as out:
-        for idx, sample in enumerate(samples):
+        for sample in samples:
             row = dict(sample)
-            preds = by_idx.get(idx, {})
+            qid = row.get("question_id", "")
+            # Prefer fresh batch answers; fall back to existing predictions
+            if qid in by_qid:
+                preds = by_qid[qid]
+            elif qid in existing_preds:
+                preds = existing_preds[qid]
+            else:
+                preds = {}
             row["pred_dense"] = preds.get("dense", "")
             row["pred_graph"] = preds.get("graph", "")
             out.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -272,3 +349,4 @@ def collect_batches(state_path: Path, output_dir: Path, output_file: Optional[Pa
     )
     print(f"Output: {output_path}")
     return 0
+

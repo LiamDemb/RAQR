@@ -96,30 +96,35 @@ def main() -> int:
         logger.error("Benchmark not found: %s", benchmark_path)
         return 1
 
+    # Clean stale batch state from prior completed runs so submit can re-evaluate
+    # (Do NOT delete oracle_raw_scores.jsonl — submit_batches reads it for caching)
+    if state_path.is_file():
+        state_path.unlink()
+        logger.info("Removed stale %s", STATE_FILENAME)
+
     # 1. Submit Batch
+    logger.info("Submitting strategy generation batch...")
+    exit_code = submit_batches(
+        benchmark_path=benchmark_path,
+        output_dir=output_dir,
+        limit=args.limit,
+        include_test=False,
+        completion_window="24h"
+    )
+    if exit_code != 0:
+        logger.error("Submit failed.")
+        return exit_code
+        
     if not state_path.is_file():
-        logger.info("Submitting strategy generation batch...")
-        exit_code = submit_batches(
-            benchmark_path=benchmark_path,
-            output_dir=output_dir,
-            limit=args.limit,
-            include_test=False,
-            completion_window="24h"
-        )
-        if exit_code != 0:
-            logger.error("Submit failed.")
-            return exit_code
-            
-        if not state_path.is_file():
-            logger.error("State file not created after submit.")
-            return 1
+        logger.error("State file not created after submit.")
+        return 1
 
     with state_path.open("r", encoding="utf-8") as f:
         state = json.load(f)
     shards = state.get("shards") or []
     if not shards:
-        logger.error("No shards in state.")
-        return 1
+        logger.info("No shards to process (all questions already answered). Output is up to date.")
+        return 0
 
     # 2. Wait for Batch
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))

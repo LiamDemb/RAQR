@@ -105,19 +105,59 @@ def main() -> int:
         return 1
 
     # Load oracle_raw_scores
-    items = []
+    all_items = []
     with input_path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            items.append(json.loads(line))
+            all_items.append(json.loads(line))
 
-    if not items:
+    if not all_items:
         logger.warning("No items in input. Exiting.")
         return 0
 
-    logger.info("Loaded %d items from %s", len(items), input_path)
+    logger.info("Loaded %d items from %s", len(all_items), input_path)
+
+    # ── Incremental: load existing labeled files to skip already-computed questions ──
+    existing_rows_by_split: dict[str, list[dict]] = {}
+    completed_qids: set[str] = set()
+    for split_name in ("train", "dev", "test"):
+        labeled_path = output_dir / f"labeled_{split_name}.jsonl"
+        if not labeled_path.is_file():
+            continue
+        rows = []
+        with labeled_path.open("r", encoding="utf-8") as ef:
+            for line in ef:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                qid = row.get("question_id", "")
+                if qid:
+                    completed_qids.add(qid)
+                rows.append(row)
+        existing_rows_by_split[split_name] = rows
+
+    # Filter to novel items only
+    novel_items = [
+        item for item in all_items
+        if item.get("question_id", "") not in completed_qids
+    ]
+    skipped = len(all_items) - len(novel_items)
+    if skipped:
+        logger.info(
+            "Skipping %d already-computed questions (%d novel to process).",
+            skipped,
+            len(novel_items),
+        )
+
+    if not novel_items:
+        logger.info("All questions already computed. Nothing to do.")
+        return 0
 
     # Initialize components (load once)
     processed_dir = input_path.parent
@@ -147,20 +187,93 @@ def main() -> int:
     nlp = get_qfeat_nlp()
     qfeat_fn = lambda q: compute_qfeat(q, nlp=nlp)
 
-    # Build rows and group by split
-    split_to_rows: dict[str, list[dict]] = {}
-    for row in build_router_dataset_rows(
-        items,
-        embedder=embedder,
-        probe=probe,
-        compute_qfeat=qfeat_fn,
-        delta=args.delta,
-    ):
-        split = row.get("split", "train")
-        split_to_rows.setdefault(split, []).append(row)
+    # Build rows only for novel items (embeddings/probe scores are expensive)
+    all_new_rows: list[dict] = list(
+        build_router_dataset_rows(
+            novel_items,
+            embedder=embedder,
+            probe=probe,
+            compute_qfeat=qfeat_fn,
+            delta=args.delta,
+        )
+    )
 
-    # Write split-specific files
-    for split, rows in split_to_rows.items():
+    # ── Collect ALL rows (feature cache from existing files + newly computed) ──
+    # Existing rows are used ONLY as a feature cache; their old split
+    # assignments are discarded. We re-split the entire pool by gold_label.
+    all_existing_rows: list[dict] = [
+        row
+        for rows in existing_rows_by_split.values()
+        for row in rows
+    ]
+    all_rows = all_existing_rows + all_new_rows
+
+    if not all_rows:
+        logger.info("No rows to write.")
+        print(f"Output: {output_dir}")
+        return 0
+
+    # ── Full 3-way stratified split of ALL rows by gold_label ──
+    train_ratio = float(os.getenv("TRAIN_RATIO", "0.8"))
+    dev_ratio   = float(os.getenv("DEV_RATIO",   "0.1"))
+    test_ratio  = float(os.getenv("TEST_RATIO",  "0.1"))
+    seed        = int(os.getenv("SEED", "42"))
+
+    try:
+        from collections import Counter
+        from sklearn.model_selection import train_test_split as sk_split
+
+        labels = [r.get("gold_label", "Dense") for r in all_rows]
+        label_counts = Counter(labels)
+
+        # First carve out test set
+        test_frac = test_ratio / (train_ratio + dev_ratio + test_ratio)
+        can_stratify = all(c >= 2 for c in label_counts.values()) and len(all_rows) > 2
+
+        traindev_rows, test_rows = sk_split(
+            all_rows,
+            test_size=test_frac,
+            random_state=seed,
+            stratify=labels if can_stratify else None,
+        )
+
+        # Then carve dev from the remaining train+dev pool
+        traindev_labels = [r.get("gold_label", "Dense") for r in traindev_rows]
+        td_counts = Counter(traindev_labels)
+        can_stratify_td = all(c >= 2 for c in td_counts.values()) and len(traindev_rows) > 2
+        dev_frac_of_td = dev_ratio / (train_ratio + dev_ratio)
+
+        train_rows, dev_rows = sk_split(
+            traindev_rows,
+            test_size=dev_frac_of_td,
+            random_state=seed,
+            stratify=traindev_labels if can_stratify_td else None,
+        )
+
+        for r in train_rows: r["split"] = "train"
+        for r in dev_rows:   r["split"] = "dev"
+        for r in test_rows:  r["split"] = "test"
+
+        final_splits: dict[str, list[dict]] = {
+            "train": list(train_rows),
+            "dev":   list(dev_rows),
+            "test":  list(test_rows),
+        }
+
+        logger.info(
+            "Final stratified split%s: %d train / %d dev / %d test (total %d).",
+            " (by gold_label)" if can_stratify else " (random – too few samples per class)",
+            len(train_rows), len(dev_rows), len(test_rows), len(all_rows),
+        )
+
+    except ImportError:
+        logger.warning("sklearn not found; assigning all rows to 'train'.")
+        for r in all_rows:
+            r["split"] = "train"
+        final_splits = {"train": all_rows}
+
+    # ── Write final split files ──
+    for split, rows in sorted(final_splits.items()):
         out_path = output_dir / f"labeled_{split}.jsonl"
         with out_path.open("w", encoding="utf-8") as f:
             for row in rows:

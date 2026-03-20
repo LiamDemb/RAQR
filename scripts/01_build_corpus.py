@@ -143,7 +143,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build unified corpus + indexes.")
     parser.add_argument("--benchmark", default=os.getenv("BENCHMARK_PATH"))
     parser.add_argument("--nq", default=os.getenv("NQ_PATH"))
-    parser.add_argument("--2wiki", default=os.getenv("2WIKI_PATH"))
+    parser.add_argument("--2wiki", dest="wiki2", default=os.getenv("2WIKI_PATH"))
     parser.add_argument(
         "--output-dir", default=os.getenv("OUTPUT_DIR", "data/processed")
     )
@@ -197,7 +197,7 @@ def main() -> int:
 
     path_env_map = {
         "nq": ("NQ_PATH", args.nq),
-        "2wiki": ("2WIKI_PATH", args.2wiki),
+        "2wiki": ("2WIKI_PATH", args.wiki2),
     }
     paths_by_source: Dict[str, str] = {}
     missing = []
@@ -263,8 +263,23 @@ def main() -> int:
             "FlashText not installed; seed titles will be empty for IE extraction."
         )
 
+    # ── Load existing corpus as a chunk cache (keyed by chunk_id) ──
+    corpus_path = output_dir / "corpus.jsonl"
+    chunk_cache: Dict[str, dict] = {}
+    if corpus_path.is_file():
+        for cached in _iter_jsonl(str(corpus_path)):
+            cid = cached.get("chunk_id")
+            if cid:
+                chunk_cache[cid] = cached
+        logger.info(
+            "Loaded chunk cache with %d existing chunks from %s",
+            len(chunk_cache),
+            corpus_path,
+        )
+
     chunks: List[dict] = []
     chunk_texts: List[str] = []
+    cached_count = 0
 
     for doc in all_docs.values():
         if not doc.html:
@@ -288,36 +303,75 @@ def main() -> int:
                 overlap_tokens=args.chunk_overlap_tokens,
             )
         ):
+            chunk_id = sha256_text(f"{doc.doc_key}:{idx}:{piece.text}")
             text_for_extraction = normalize_text_for_extraction(piece.text)
-            entities: List[dict] = []
-            relations: List[dict] = []
-            metadata = {
-                "dataset_origin": structured.dataset_origin,
-                "page_id": structured.page_id,
-                "revision_id": structured.revision_id,
-                "entities": entities,
-                "anchors": structured.anchors,
-            }
-            chunk = CorpusChunk(
-                chunk_id=sha256_text(f"{doc.doc_key}:{idx}:{piece.text}"),
-                doc_id=doc.doc_key,
-                source=doc.source,
-                title=doc.title,
-                url=doc.url,
-                text=piece.text,
-                section_path=piece.section_path,
-                char_span_in_doc=piece.char_span_in_doc,
-                metadata=metadata,
-            )
-            chunk_json = chunk.to_json()
-            chunks.append(chunk_json)
-            chunk_texts.append(text_for_extraction)
 
-    for idx in range(len(chunks)):
-        chunks[idx].setdefault("metadata", {})["relations"] = []
+            # Check cache: if this chunk was already extracted, carry over metadata
+            prior = chunk_cache.get(chunk_id)
+            if prior is not None:
+                prior_meta = prior.get("metadata", {})
+                has_extraction = (
+                    bool(prior_meta.get("entities"))
+                    or bool(prior_meta.get("relations"))
+                )
+            else:
+                has_extraction = False
 
-    corpus_path = output_dir / "corpus.jsonl"
+            if prior is not None and has_extraction:
+                # Reuse the fully-extracted chunk from cache
+                prior.setdefault("metadata", {})["ie_extracted"] = True
+                chunks.append(prior)
+                chunk_texts.append(text_for_extraction)
+                cached_count += 1
+            else:
+                # Build fresh chunk that needs LLM extraction
+                entities: List[dict] = []
+                relations: List[dict] = []
+                metadata = {
+                    "dataset_origin": structured.dataset_origin,
+                    "page_id": structured.page_id,
+                    "revision_id": structured.revision_id,
+                    "entities": entities,
+                    "anchors": structured.anchors,
+                    "relations": relations,
+                    "ie_extracted": False,
+                }
+                chunk = CorpusChunk(
+                    chunk_id=chunk_id,
+                    doc_id=doc.doc_key,
+                    source=doc.source,
+                    title=doc.title,
+                    url=doc.url,
+                    text=piece.text,
+                    section_path=piece.section_path,
+                    char_span_in_doc=piece.char_span_in_doc,
+                    metadata=metadata,
+                )
+                chunk_json = chunk.to_json()
+                chunks.append(chunk_json)
+                chunk_texts.append(text_for_extraction)
+
+    logger.info(
+        "Chunks: %d total (%d from cache, %d new)",
+        len(chunks),
+        cached_count,
+        len(chunks) - cached_count,
+    )
+
     _write_jsonl(corpus_path, chunks)
+
+    # ── Clean up stale IE batch artifacts from prior runs ──
+    stale_files = [
+        "batch_state_ie.json",
+        "batch_state_onepass.json",
+        "corpus_llm_ie.jsonl",
+        "corpus_llm_onepass.jsonl",
+    ]
+    for name in stale_files:
+        stale = output_dir / name
+        if stale.is_file():
+            stale.unlink()
+            logger.info("Removed stale %s", name)
 
     script_dir = Path(__file__).resolve().parent
     ie_script = script_dir / "corpus" / "run_llm_ie_batch.py"

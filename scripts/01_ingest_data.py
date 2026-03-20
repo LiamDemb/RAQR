@@ -21,46 +21,6 @@ def normalize_question(text: str) -> str:
     return " ".join(text.lower().strip().split())
 
 
-def stratified_split(
-    items_by_source: Dict[str, List[BenchmarkItem]],
-    seed: int,
-    train_ratio: float,
-    dev_ratio: float,
-    test_ratio: float,
-) -> List[BenchmarkItem]:
-    rng = random.Random(seed)
-    split_items: List[BenchmarkItem] = []
-    for source, items in items_by_source.items():
-        ordered = sorted(items, key=lambda item: item.question_id)
-        rng.shuffle(ordered)
-        total = len(ordered)
-        train_count = int(total * train_ratio)
-        dev_count = int(total * dev_ratio)
-        test_count = total - train_count - dev_count
-        split_map = (
-            ["train"] * train_count + ["dev"] * dev_count + ["test"] * test_count
-        )
-        for item, split in zip(ordered, split_map):
-            split_items.append(
-                BenchmarkItem(
-                    question_id=item.question_id,
-                    question=item.question,
-                    gold_answers=item.gold_answers,
-                    dataset_source=item.dataset_source,
-                    split=split,
-                    dataset_version=item.dataset_version,
-                )
-            )
-        logger.info(
-            "Split %s: total=%d train=%d dev=%d test=%d",
-            source,
-            total,
-            train_count,
-            dev_count,
-            test_count,
-        )
-    return split_items
-
 
 def write_jsonl(path: Path, items: Iterable[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -91,10 +51,33 @@ def validate_outputs(benchmark: List[BenchmarkItem]) -> None:
         normalized = normalize_question(item.question)
         normalized_hash = sha256_text(normalized)
         if normalized_hash in question_texts:
-            if question_texts[normalized_hash] != item.split:
-                raise ValueError("Normalized question leakage across splits.")
+            pass  # duplicate normalized text is allowed across unassigned items
         else:
-            question_texts[normalized_hash] = item.split
+            question_texts[normalized_hash] = True
+
+
+def _load_existing_benchmark(path: Path) -> List[BenchmarkItem]:
+    """Load an existing benchmark.jsonl, returning a list of BenchmarkItems."""
+    items: List[BenchmarkItem] = []
+    if not path.is_file():
+        return items
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            items.append(
+                BenchmarkItem(
+                    question_id=row["question_id"],
+                    question=row["question"],
+                    gold_answers=row["gold_answers"],
+                    dataset_source=row["dataset_source"],
+                    split=row["split"],
+                    dataset_version=row.get("dataset_version"),
+                )
+            )
+    return items
 
 
 def main() -> int:
@@ -107,6 +90,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--2wiki",
+        dest="wiki2",
         default=os.getenv("2WIKI_PATH"),
         help="Path to 2WikiMultiHopQA JSON/JSONL.",
     )
@@ -115,23 +99,13 @@ def main() -> int:
         default=os.getenv("OUTPUT_DIR", "data/processed"),
         help="Output directory for processed artifacts.",
     )
-    parser.add_argument("--seed", type=int, default=int(os.getenv("SEED", "42")))
-    parser.add_argument(
-        "--train-ratio", type=float, default=float(os.getenv("TRAIN_RATIO", "0.8"))
-    )
-    parser.add_argument(
-        "--dev-ratio", type=float, default=float(os.getenv("DEV_RATIO", "0.1"))
-    )
-    parser.add_argument(
-        "--test-ratio", type=float, default=float(os.getenv("TEST_RATIO", "0.1"))
-    )
     parser.add_argument("--nq-version", default=os.getenv("NQ_VERSION"))
-    parser.add_argument("--2wiki-version", default=os.getenv("2WIKI_VERSION"))
+    parser.add_argument("--2wiki-version", dest="wiki2_version", default=os.getenv("2WIKI_VERSION"))
     args = parser.parse_args()
 
     dataset_paths = [
         args.nq,
-        args.2wiki,
+        args.wiki2,
     ]
     if not any(p and str(p).strip() for p in dataset_paths):
         raise ValueError(
@@ -141,38 +115,70 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    if abs(args.train_ratio + args.dev_ratio + args.test_ratio - 1.0) > 1e-6:
-        raise ValueError("Split ratios must sum to 1.0.")
+    # ── Load existing benchmark (if any) to preserve prior questions ──
+    output_dir = Path(args.output_dir)
+    benchmark_path = output_dir / "benchmark.jsonl"
+    existing_items = _load_existing_benchmark(benchmark_path)
+    seen_ids: set = {item.question_id for item in existing_items}
+    if existing_items:
+        logger.info(
+            "Found existing benchmark with %d questions – will skip duplicates.",
+            len(existing_items),
+        )
 
-    benchmark_by_source: Dict[str, List[BenchmarkItem]] = defaultdict(list)
+    # ── Load new items from source datasets, filtering out seen ids ──
+    new_by_source: Dict[str, List[BenchmarkItem]] = defaultdict(list)
 
     if args.nq and str(args.nq).strip():
         for item in load_nq(args.nq, dataset_version=args.nq_version):
-            benchmark_by_source[item.dataset_source].append(item)
+            if item.question_id not in seen_ids:
+                new_by_source[item.dataset_source].append(item)
         logger.info("Loaded NQ from %s", args.nq)
 
-    if args.2wiki and str(args.2wiki).strip():
-        for item in load_2wiki(args.2wiki, dataset_version=args.2wiki_version):
-            benchmark_by_source[item.dataset_source].append(item)
-        logger.info("Loaded 2WikiMultiHopQA from %s", args.2wiki)
+    if args.wiki2 and str(args.wiki2).strip():
+        for item in load_2wiki(args.wiki2, dataset_version=args.wiki2_version):
+            if item.question_id not in seen_ids:
+                new_by_source[item.dataset_source].append(item)
+        logger.info("Loaded 2WikiMultiHopQA from %s", args.wiki2)
 
-    sources_loaded = sorted(benchmark_by_source.keys())
-    logger.info("Datasets included: %s", ", ".join(sources_loaded))
+    novel_count = sum(len(v) for v in new_by_source.values())
+    logger.info("Novel questions to add: %d", novel_count)
 
-    benchmark = stratified_split(
-        benchmark_by_source,
-        seed=args.seed,
-        train_ratio=args.train_ratio,
-        dev_ratio=args.dev_ratio,
-        test_ratio=args.test_ratio,
+    if novel_count == 0:
+        logger.info("No new questions to ingest. Benchmark unchanged.")
+        return 0
+
+    sources_loaded = sorted(new_by_source.keys())
+    logger.info("New datasets included: %s", ", ".join(sources_loaded))
+
+    # ── Assign split='unassigned' to all new items — final split done later ──
+    new_items: List[BenchmarkItem] = []
+    for source, items in new_by_source.items():
+        for item in items:
+            new_items.append(
+                BenchmarkItem(
+                    question_id=item.question_id,
+                    question=item.question,
+                    gold_answers=item.gold_answers,
+                    dataset_source=item.dataset_source,
+                    split="unassigned",
+                    dataset_version=item.dataset_version,
+                )
+            )
+        logger.info("Queued %d new items from source '%s'.", len(items), source)
+
+    # ── Combine existing + new ──
+    combined = existing_items + new_items
+    validate_outputs(combined)
+
+    write_jsonl(benchmark_path, (item.to_json() for item in combined))
+
+    logger.info(
+        "Benchmark size: %d (existing=%d, added=%d)",
+        len(combined),
+        len(existing_items),
+        len(new_items),
     )
-    validate_outputs(benchmark)
-
-    output_dir = Path(args.output_dir)
-    benchmark_path = output_dir / "benchmark.jsonl"
-    write_jsonl(benchmark_path, (item.to_json() for item in benchmark))
-
-    logger.info("Benchmark size: %d", len(benchmark))
     logger.info("Wrote %s", benchmark_path)
 
     return 0

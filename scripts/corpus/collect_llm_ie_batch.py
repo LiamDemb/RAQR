@@ -165,10 +165,28 @@ def main() -> int:
     with output_path.open("w", encoding="utf-8") as out:
         for chunk in chunk_list:
             chunk_id = chunk.get("chunk_id") or ""
-            raw_entities, raw_triples = raw_by_id.get(chunk_id, ([], []))
-            text = chunk.get("text") or ""
+            chunk = dict(chunk)
+            meta = chunk.setdefault("metadata", {})
 
-            entities, relations = _post_process_onepass(raw_entities, raw_triples, text, chunk_id)
+            if chunk_id in raw_by_id:
+                # This chunk was in the current batch – apply new extraction
+                raw_entities, raw_triples = raw_by_id[chunk_id]
+                text = chunk.get("text") or ""
+                entities, relations = _post_process_onepass(raw_entities, raw_triples, text, chunk_id)
+                meta["entities"] = entities
+                meta["relations"] = relations
+            elif meta.get("ie_extracted"):
+                # Already extracted in a prior run – keep existing data
+                entities = meta.get("entities", [])
+                relations = meta.get("relations", [])
+            else:
+                # Not in batch and not cached – leave empty
+                entities = []
+                relations = []
+                meta["entities"] = entities
+                meta["relations"] = relations
+
+            meta["ie_extracted"] = True
 
             if not entities:
                 empty_entities += 1
@@ -177,9 +195,6 @@ def main() -> int:
             total_entities += len(entities)
             total_relations += len(relations)
 
-            chunk = dict(chunk)
-            chunk.setdefault("metadata", {})["entities"] = entities
-            chunk.setdefault("metadata", {})["relations"] = relations
             out.write(json.dumps(chunk, ensure_ascii=False) + "\n")
 
     logger.info("Wrote %s", output_path)
