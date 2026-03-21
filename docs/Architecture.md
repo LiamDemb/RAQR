@@ -210,11 +210,11 @@ Runs _before_ the router. It executes a low-latency search (Dense RAG top-k=10).
 
 #### 2. Classifier Router (`classifier.py`)
 
-- **Architecture:** DistilBERT model with a modified Classification Head.
+- **Architecture:** MLP Classification Head with dynamic input dimension.
 - **Inputs:**
-    - Tokens (Text) $\rightarrow$ Transformer Layers $\rightarrow$ `[CLS]` embedding.
-    - Signals (Floats) $\rightarrow$ Normalized $\rightarrow$ Concatenated with `[CLS]`.
-    - Output $\rightarrow$ Linear Layer $\rightarrow$ Softmax (3 classes).
+    - Q-Emb: Pre-computed `all-MiniLM-L6-v2` embedding (384 dims).
+    - Signals (Floats) → Z-score Normalized → Concatenated with Q-Emb.
+    - Output → Linear Layer → Softmax (2 classes: Dense, Graph).
 
 #### 3. LLM Router (`llm.py`)
 
