@@ -86,6 +86,11 @@ def main() -> int:
         default=DEFAULT_DELTA,
         help=f"Oracle margin for Graph to win (default: {DEFAULT_DELTA}).",
     )
+    parser.add_argument(
+        "--undersample",
+        action="store_true",
+        help="Undersample the training set to a 50/50 class balance.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -249,6 +254,43 @@ def main() -> int:
             random_state=seed,
             stratify=traindev_labels if can_stratify_td else None,
         )
+
+        # ── Optional: Undersample the train set for 50/50 balance ──
+        if args.undersample:
+            train_labels = [r.get("gold_label", "Dense") for r in train_rows]
+            train_counts = Counter(train_labels)
+            
+            if len(train_counts) == 2:
+                # Find the minority class and its count
+                min_label, min_count = train_counts.most_common()[-1]
+                
+                # Group rows by label
+                grouped_train = {"Dense": [], "Graph": []}
+                for r in train_rows:
+                    grouped_train[r.get("gold_label", "Dense")].append(r)
+                
+                # Sample 'min_count' from both classes using random seed
+                import random
+                rng = random.Random(seed)
+                
+                balanced_train = []
+                for label, rows in grouped_train.items():
+                    if label == min_label:
+                        balanced_train.extend(rows)
+                    else:
+                        balanced_train.extend(rng.sample(rows, min_count))
+                
+                # Shuffle the resulting balanced set
+                rng.shuffle(balanced_train)
+                
+                logger.info(
+                    "Undersampled train set from %d (Dense=%d/Graph=%d) to %d (50/50).",
+                    len(train_rows), train_counts.get("Dense", 0), train_counts.get("Graph", 0),
+                    len(balanced_train)
+                )
+                train_rows = balanced_train
+            else:
+                logger.warning("Cannot undersample: train set does not contain both classes.")
 
         for r in train_rows: r["split"] = "train"
         for r in dev_rows:   r["split"] = "dev"

@@ -121,6 +121,15 @@ build-router-dataset:
 		$(if $(PROBE_TOP_K),--probe-top-k $(PROBE_TOP_K)) \
 		$(if $(DELTA),--delta $(DELTA))
 
+build-router-dataset-undersample:
+	poetry run python scripts/oracle/build_router_dataset.py \
+		--input "$(OUTPUT_DIR)/oracle_raw_scores.jsonl" \
+		--output-dir "data/training" \
+		--undersample \
+		$(if $(PROBE_TOP_K),--probe-top-k $(PROBE_TOP_K)) \
+		$(if $(DELTA),--delta $(DELTA))
+		
+
 # Phase 4: Train classifier router. SIGNALS=q_emb,q_feat,probe (comma-separated)
 SIGNALS ?= q_emb,q_feat,probe
 EPOCHS ?= 100
