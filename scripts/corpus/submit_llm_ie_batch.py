@@ -92,12 +92,33 @@ def main() -> int:
 
     prompt_template = get_onepass_extraction_prompt()
 
-    chunks = list(_iter_jsonl(corpus_path))
+    all_chunks = list(_iter_jsonl(corpus_path))
     if args.limit is not None:
-        chunks = chunks[: args.limit]
-    if not chunks:
+        all_chunks = all_chunks[: args.limit]
+    if not all_chunks:
         logger.error("No chunks to process.")
         return 1
+
+    # Filter out already-extracted chunks (ie_extracted flag from build_corpus)
+    chunks = [
+        c for c in all_chunks
+        if not c.get("metadata", {}).get("ie_extracted", False)
+    ]
+    skipped = len(all_chunks) - len(chunks)
+    if skipped:
+        logger.info(
+            "Skipping %d already-extracted chunks (%d remaining for batch).",
+            skipped,
+            len(chunks),
+        )
+    if not chunks:
+        logger.info("All chunks already extracted. Nothing to submit.")
+        # Write empty state so downstream scripts can detect no work was needed
+        state = {"shards": [], "corpus_path": str(corpus_path), "total_requests": 0}
+        state_path = output_dir / STATE_FILENAME
+        with state_path.open("w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        return 0
 
     shards: list[dict] = []
     shard_idx = 0

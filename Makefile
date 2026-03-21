@@ -1,4 +1,4 @@
-.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple eval-strategies mock-oracle debug-graph debug-ie submit-ie-batch collect-ie-batch build-graph-from-corpus
+.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple eval-strategies mock-oracle debug-graph debug-ie submit-ie-batch collect-ie-batch build-graph-from-corpus run-strategy-batch submit-strategy-batch collect-strategy-batch build-router-dataset
 
 -include .env
 
@@ -89,3 +89,34 @@ build-graph-from-corpus:
 	poetry run python scripts/corpus/build_graph_from_corpus.py \
 		--corpus "$(OUTPUT_DIR)/corpus.jsonl" \
 		--graph-out "$(OUTPUT_DIR)/graph.pkl"
+
+# Strategy batch (Phase 3): submit -> wait -> collect. Dense + Graph answers per question.
+# Output: oracle_raw_scores.jsonl with pred_dense, pred_graph paired per question.
+# Use LIMIT=N for quick runs, NO_WAIT=1 to exit after submit.
+run-strategy-batch:
+	poetry run python scripts/oracle/run_strategy_batch.py \
+		--benchmark "$(BENCHMARK_PATH)" \
+		--output-dir "$(OUTPUT_DIR)" \
+		$(if $(LIMIT),--limit $(LIMIT)) \
+		$(if $(NO_WAIT),--no-wait)
+
+# Answer batch: submit only (standalone; run-strategy-batch does submit+wait+collect internally)
+submit-answer-batch:
+	poetry run python scripts/oracle/submit_answer_batch.py \
+		--benchmark "$(BENCHMARK_PATH)" \
+		--output-dir "$(OUTPUT_DIR)" \
+		$(if $(LIMIT),--limit $(LIMIT))
+
+# Answer batch: collect results into oracle_raw_scores.jsonl (after batches complete)
+collect-answer-batch:
+	poetry run python scripts/oracle/collect_answer_batch.py \
+		--state "$(or $(STATE),$(OUTPUT_DIR)/batch_state_strategy.json)" \
+		--output-dir "$(OUTPUT_DIR)"
+
+# Build router dataset from oracle_raw_scores.jsonl (after collect-answer-batch)
+build-router-dataset:
+	poetry run python scripts/oracle/build_router_dataset.py \
+		--input "$(OUTPUT_DIR)/oracle_raw_scores.jsonl" \
+		--output-dir "data/training" \
+		$(if $(PROBE_TOP_K),--probe-top-k $(PROBE_TOP_K)) \
+		$(if $(DELTA),--delta $(DELTA))

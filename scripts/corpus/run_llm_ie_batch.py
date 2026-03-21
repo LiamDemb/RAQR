@@ -120,8 +120,8 @@ def main() -> int:
         state = json.load(f)
     shards = state.get("shards") or []
     if not shards:
-        logger.error("No shards in state.")
-        return 1
+        logger.info("No shards to process (all chunks already extracted). Corpus is up to date.")
+        return 0
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
