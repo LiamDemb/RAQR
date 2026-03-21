@@ -144,10 +144,18 @@ def validate_single(
     dev_ds = RouterDataset(dev_path, config, scaler=scaler)
     dev_loader = DataLoader(dev_ds, batch_size=batch_size, shuffle=False)
 
+    # Rebuild the exact same architecture from the checkpoint's config flags
+    if "config_flags" in checkpoint:
+        # New checkpoints: reconstruct SignalConfig from stored flags
+        stored_config = SignalConfig(**checkpoint["config_flags"])
+    else:
+        # Legacy checkpoints: fall back to the config passed in
+        stored_config = config
+
     model = RouterClassifier(
-        input_dim=checkpoint["input_dim"],
+        config=stored_config,
         hidden_dim=checkpoint["hidden_dim"],
-        dropout=checkpoint.get("dropout", 0.3),
+        dropout=checkpoint.get("dropout", 0.5),
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()

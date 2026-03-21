@@ -21,6 +21,7 @@ load_dotenv()
 import numpy as np
 import torch
 import torch.nn as nn
+from sklearn.metrics import f1_score
 from torch.utils.data import DataLoader
 
 from raqr.routers import RouterClassifier, RouterDataset, SignalConfig
@@ -46,8 +47,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--weight-decay", type=float, default=0.01)
     p.add_argument("--hidden-dim", type=int, default=128)
-    p.add_argument("--dropout", type=float, default=0.3)
+    p.add_argument("--dropout", type=float, default=0.5)
     p.add_argument("--patience", type=int, default=15, help="Early stopping patience")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args(argv)
@@ -90,10 +92,12 @@ def evaluate(
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
+    """Returns (loss, accuracy, macro_f1)."""
     model.eval()
     total_loss = 0.0
-    correct = 0
+    all_preds: list[int] = []
+    all_labels: list[int] = []
     n = 0
     for x, y in loader:
         x, y = x.to(device), y.to(device)
@@ -101,9 +105,15 @@ def evaluate(
         loss = criterion(logits, y)
         total_loss += loss.item() * len(y)
         preds = logits.argmax(dim=1)
-        correct += (preds == y).sum().item()
+        all_preds.extend(preds.cpu().tolist())
+        all_labels.extend(y.cpu().tolist())
         n += len(y)
-    return total_loss / max(n, 1), correct / max(n, 1)
+
+    acc = sum(p == l for p, l in zip(all_preds, all_labels)) / max(n, 1)
+    macro_f1 = float(
+        f1_score(all_labels, all_preds, average="macro", zero_division=0)
+    )
+    return total_loss / max(n, 1), acc, macro_f1
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -127,13 +137,11 @@ def main(argv: list[str] | None = None) -> None:
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True, drop_last=False
     )
-    dev_loader = DataLoader(
-        dev_ds, batch_size=args.batch_size, shuffle=False
-    )
+    dev_loader = DataLoader(dev_ds, batch_size=args.batch_size, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = RouterClassifier(
-        input_dim=config.input_dim,
+        config=config,
         hidden_dim=args.hidden_dim,
         num_classes=2,
         dropout=args.dropout,
@@ -141,22 +149,27 @@ def main(argv: list[str] | None = None) -> None:
 
     class_weights = compute_class_weights(train_ds).to(device)
     criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+    )
 
-    logger.info("Training %s on %s | %d train, %d dev",
-                config.identifier, device, len(train_ds), len(dev_ds))
+    logger.info(
+        "Training %s on %s | %d train, %d dev | AdamW lr=%.0e wd=%.0e dropout=%.1f",
+        config.identifier, device, len(train_ds), len(dev_ds),
+        args.lr, args.weight_decay, args.dropout,
+    )
 
-    best_dev_loss = float("inf")
-    best_state = None
+    best_dev_f1 = -1.0
+    best_state: dict | None = None
     patience_counter = 0
 
     for epoch in range(1, args.epochs + 1):
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        dev_loss, dev_acc = evaluate(model, dev_loader, criterion, device)
+        dev_loss, dev_acc, dev_f1 = evaluate(model, dev_loader, criterion, device)
 
-        improved = dev_loss < best_dev_loss
+        improved = dev_f1 > best_dev_f1
         if improved:
-            best_dev_loss = dev_loss
+            best_dev_f1 = dev_f1
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             patience_counter = 0
         else:
@@ -164,13 +177,16 @@ def main(argv: list[str] | None = None) -> None:
 
         if epoch <= 5 or epoch % 10 == 0 or improved or patience_counter >= args.patience:
             logger.info(
-                "Epoch %3d | train_loss=%.4f | dev_loss=%.4f | dev_acc=%.3f%s",
-                epoch, train_loss, dev_loss, dev_acc,
+                "Epoch %3d | train_loss=%.4f | dev_loss=%.4f | dev_acc=%.3f | "
+                "dev_macro_f1=%.3f%s",
+                epoch, train_loss, dev_loss, dev_acc, dev_f1,
                 " *" if improved else "",
             )
 
         if patience_counter >= args.patience:
-            logger.info("Early stopping at epoch %d", epoch)
+            logger.info(
+                "Early stopping at epoch %d (best dev Macro-F1=%.4f)", epoch, best_dev_f1
+            )
             break
 
     if best_state is not None:
@@ -184,14 +200,19 @@ def main(argv: list[str] | None = None) -> None:
         {
             "model_state_dict": model.state_dict(),
             "config_identifier": config.identifier,
-            "input_dim": config.input_dim,
+            # Full config flags stored so the validator can rebuild the same architecture
+            "config_flags": {
+                "use_q_emb": config.use_q_emb,
+                "use_q_feat": config.use_q_feat,
+                "use_probe": config.use_probe,
+            },
             "hidden_dim": args.hidden_dim,
             "dropout": args.dropout,
-            "best_dev_loss": best_dev_loss,
+            "best_dev_macro_f1": best_dev_f1,
         },
         model_path,
     )
-    logger.info("Saved model → %s", model_path)
+    logger.info("Saved model → %s (best dev Macro-F1=%.4f)", model_path, best_dev_f1)
 
     scaler_path = out_dir / f"scaler_{config.identifier}.pkl"
     with open(scaler_path, "wb") as f:

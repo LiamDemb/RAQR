@@ -161,6 +161,8 @@ train-all-classifiers:
 		poetry run python scripts/04a_train_classifier.py \
 			--signals "$$sig" \
 			--epochs $(EPOCHS) \
+			--hidden-dim 64 \
+			--weight-decay 0.05 \
 			$(if $(LR),--lr $(LR)) \
 			$(if $(BATCH_SIZE),--batch-size $(BATCH_SIZE)); \
 	done
