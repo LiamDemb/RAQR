@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Train a router classifier for a given signal configuration.
+"""Train a router classifier (XGBoost) for a given signal configuration.
 
 Usage:
-    poetry run python scripts/04a_train_classifier.py --signals q_emb,probe --epochs 50
+    poetry run python scripts/04a_train_classifier.py --signals q_emb,probe
 """
 
 from __future__ import annotations
@@ -19,10 +19,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import numpy as np
-import torch
-import torch.nn as nn
 from sklearn.metrics import f1_score
-from torch.utils.data import DataLoader
 
 from raqr.routers import RouterClassifier, RouterDataset, SignalConfig
 
@@ -35,7 +32,7 @@ DEFAULT_RESULTS_DIR = os.environ.get("RESULTS_DIR", "results")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Train a router classifier.")
+    p = argparse.ArgumentParser(description="Train a router classifier (XGBoost).")
     p.add_argument(
         "--signals",
         required=True,
@@ -44,76 +41,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--train-path", default=DEFAULT_TRAIN_PATH)
     p.add_argument("--dev-path", default=DEFAULT_DEV_PATH)
     p.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
-    p.add_argument("--epochs", type=int, default=100)
-    p.add_argument("--batch-size", type=int, default=32)
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--weight-decay", type=float, default=0.01)
-    p.add_argument("--hidden-dim", type=int, default=128)
-    p.add_argument("--dropout", type=float, default=0.5)
-    p.add_argument("--patience", type=int, default=15, help="Early stopping patience")
+    p.add_argument("--n-estimators", type=int, default=1000)
+    p.add_argument("--max-depth", type=int, default=6)
+    p.add_argument("--learning-rate", type=float, default=0.05)
+    p.add_argument("--subsample", type=float, default=0.8)
+    p.add_argument("--colsample-bytree", type=float, default=0.8)
+    p.add_argument("--min-child-weight", type=float, default=1.0)
+    p.add_argument("--reg-lambda", type=float, default=1.0)
+    p.add_argument("--reg-alpha", type=float, default=0.0)
+    p.add_argument("--gamma", type=float, default=0.0)
+    p.add_argument(
+        "--early-stopping-rounds",
+        type=int,
+        default=40,
+        help="Stop if dev logloss does not improve for this many boosting rounds",
+    )
+    p.add_argument("--n-jobs", type=int, default=-1)
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args(argv)
 
 
-def compute_class_weights(dataset: RouterDataset) -> torch.Tensor:
-    """Inverse-frequency class weights for imbalanced labels."""
-    labels = dataset._labels
+def compute_class_weights(labels: np.ndarray) -> np.ndarray:
+    """Inverse-frequency class weights for imbalanced labels (one weight per class)."""
     counts = np.bincount(labels, minlength=2).astype(np.float32)
     weights = 1.0 / np.maximum(counts, 1.0)
     weights = weights / weights.sum() * len(weights)
-    return torch.tensor(weights, dtype=torch.float32)
-
-
-def train_one_epoch(
-    model: RouterClassifier,
-    loader: DataLoader,
-    criterion: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    device: torch.device,
-) -> float:
-    model.train()
-    total_loss = 0.0
-    n = 0
-    for x, y in loader:
-        x, y = x.to(device), y.to(device)
-        optimizer.zero_grad()
-        logits = model(x)
-        loss = criterion(logits, y)
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item() * len(y)
-        n += len(y)
-    return total_loss / max(n, 1)
-
-
-@torch.no_grad()
-def evaluate(
-    model: RouterClassifier,
-    loader: DataLoader,
-    criterion: nn.Module,
-    device: torch.device,
-) -> tuple[float, float, float]:
-    """Returns (loss, accuracy, macro_f1)."""
-    model.eval()
-    total_loss = 0.0
-    all_preds: list[int] = []
-    all_labels: list[int] = []
-    n = 0
-    for x, y in loader:
-        x, y = x.to(device), y.to(device)
-        logits = model(x)
-        loss = criterion(logits, y)
-        total_loss += loss.item() * len(y)
-        preds = logits.argmax(dim=1)
-        all_preds.extend(preds.cpu().tolist())
-        all_labels.extend(y.cpu().tolist())
-        n += len(y)
-
-    acc = sum(p == l for p, l in zip(all_preds, all_labels)) / max(n, 1)
-    macro_f1 = float(
-        f1_score(all_labels, all_preds, average="macro", zero_division=0)
-    )
-    return total_loss / max(n, 1), acc, macro_f1
+    return weights
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -125,7 +78,6 @@ def main(argv: list[str] | None = None) -> None:
         datefmt="%H:%M:%S",
     )
 
-    torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
     config = SignalConfig.from_str(args.signals)
@@ -134,85 +86,81 @@ def main(argv: list[str] | None = None) -> None:
     train_ds = RouterDataset(args.train_path, config)
     dev_ds = RouterDataset(args.dev_path, config, scaler=train_ds.scaler)
 
-    train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True, drop_last=False
-    )
-    dev_loader = DataLoader(dev_ds, batch_size=args.batch_size, shuffle=False)
+    X_train = train_ds.numpy_features
+    y_train = train_ds.numpy_labels
+    X_dev = dev_ds.numpy_features
+    y_dev = dev_ds.numpy_labels
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    class_w = compute_class_weights(y_train)
+    sample_weight = class_w[y_train]
+
     model = RouterClassifier(
         config=config,
-        hidden_dim=args.hidden_dim,
-        num_classes=2,
-        dropout=args.dropout,
-    ).to(device)
-
-    class_weights = compute_class_weights(train_ds).to(device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+        random_state=args.seed,
+        n_estimators=args.n_estimators,
+        max_depth=args.max_depth,
+        learning_rate=args.learning_rate,
+        subsample=args.subsample,
+        colsample_bytree=args.colsample_bytree,
+        min_child_weight=args.min_child_weight,
+        reg_lambda=args.reg_lambda,
+        reg_alpha=args.reg_alpha,
+        gamma=args.gamma,
+        n_jobs=args.n_jobs,
+        # XGBoost 2.x: early stopping is configured on the estimator, not fit().
+        early_stopping_rounds=args.early_stopping_rounds,
     )
 
     logger.info(
-        "Training %s on %s | %d train, %d dev | AdamW lr=%.0e wd=%.0e dropout=%.1f",
-        config.identifier, device, len(train_ds), len(dev_ds),
-        args.lr, args.weight_decay, args.dropout,
+        "Training %s | %d train, %d dev | n_estimators=%d max_depth=%d lr=%.3f "
+        "early_stopping_rounds=%d",
+        config.identifier,
+        len(train_ds),
+        len(dev_ds),
+        args.n_estimators,
+        args.max_depth,
+        args.learning_rate,
+        args.early_stopping_rounds,
     )
 
-    best_dev_f1 = -1.0
-    best_state: dict | None = None
-    patience_counter = 0
+    model.fit(
+        X_train,
+        y_train,
+        sample_weight=sample_weight,
+        eval_set=[(X_dev, y_dev)],
+        verbose=False,
+    )
 
-    for epoch in range(1, args.epochs + 1):
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        dev_loss, dev_acc, dev_f1 = evaluate(model, dev_loader, criterion, device)
-
-        improved = dev_f1 > best_dev_f1
-        if improved:
-            best_dev_f1 = dev_f1
-            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            patience_counter = 0
-        else:
-            patience_counter += 1
-
-        if epoch <= 5 or epoch % 10 == 0 or improved or patience_counter >= args.patience:
-            logger.info(
-                "Epoch %3d | train_loss=%.4f | dev_loss=%.4f | dev_acc=%.3f | "
-                "dev_macro_f1=%.3f%s",
-                epoch, train_loss, dev_loss, dev_acc, dev_f1,
-                " *" if improved else "",
-            )
-
-        if patience_counter >= args.patience:
-            logger.info(
-                "Early stopping at epoch %d (best dev Macro-F1=%.4f)", epoch, best_dev_f1
-            )
-            break
-
-    if best_state is not None:
-        model.load_state_dict(best_state)
+    dev_preds = model.predict(X_dev)
+    best_dev_f1 = float(
+        f1_score(y_dev, dev_preds, average="macro", zero_division=0)
+    )
+    logger.info(
+        "Finished | best_iteration=%s | dev_macro_f1=%.4f",
+        getattr(model.estimator, "best_iteration", None),
+        best_dev_f1,
+    )
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    model_path = out_dir / f"classifier_{config.identifier}.pt"
-    torch.save(
-        {
-            "model_state_dict": model.state_dict(),
-            "config_identifier": config.identifier,
-            # Full config flags stored so the validator can rebuild the same architecture
-            "config_flags": {
-                "use_q_emb": config.use_q_emb,
-                "use_q_feat": config.use_q_feat,
-                "use_probe": config.use_probe,
-            },
-            "hidden_dim": args.hidden_dim,
-            "dropout": args.dropout,
-            "best_dev_macro_f1": best_dev_f1,
+    model_path = out_dir / f"classifier_{config.identifier}.pkl"
+    payload = {
+        "backend": "xgboost",
+        "model": model.estimator,
+        "config_identifier": config.identifier,
+        "config_flags": {
+            "use_q_emb": config.use_q_emb,
+            "use_q_feat": config.use_q_feat,
+            "use_probe": config.use_probe,
         },
-        model_path,
-    )
-    logger.info("Saved model → %s (best dev Macro-F1=%.4f)", model_path, best_dev_f1)
+        "xgb_params": model.xgb_params,
+        "feature_dim": int(X_train.shape[1]),
+        "best_dev_macro_f1": best_dev_f1,
+    }
+    with open(model_path, "wb") as f:
+        pickle.dump(payload, f)
+    logger.info("Saved model → %s (dev Macro-F1=%.4f)", model_path, best_dev_f1)
 
     scaler_path = out_dir / f"scaler_{config.identifier}.pkl"
     with open(scaler_path, "wb") as f:

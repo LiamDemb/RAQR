@@ -1,16 +1,12 @@
-"""Tests for RouterClassifier forward pass shape consistency."""
+"""Tests for RouterClassifier (XGBoost) shapes and predict consistency."""
 
+from __future__ import annotations
+
+import numpy as np
 import pytest
-import torch
 
-from raqr.routers.classifier import RouterClassifier, EMB_COMPRESSED_DIM
-from raqr.routers.signal_config import (
-    PROBE_DIM,
-    Q_EMB_DIM,
-    Q_FEAT_DIM,
-    SignalConfig,
-)
-
+from raqr.routers.classifier import RouterClassifier
+from raqr.routers.signal_config import SignalConfig
 
 ALL_CONFIGS = [
     SignalConfig(use_q_emb=True),
@@ -23,62 +19,44 @@ ALL_CONFIGS = [
 ]
 
 
-class TestForwardPass:
+class TestPredictProba:
     @pytest.mark.parametrize("config", ALL_CONFIGS, ids=lambda c: c.identifier)
-    def test_output_shape(self, config: SignalConfig):
-        model = RouterClassifier(config=config, num_classes=2)
-        batch = torch.randn(8, config.input_dim)
-        out = model(batch)
-        assert out.shape == (8, 2)
+    def test_output_shape_after_fit(self, config: SignalConfig) -> None:
+        n, d = 24, config.input_dim
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((n, d)).astype(np.float32)
+        y = rng.integers(0, 2, size=n, dtype=np.int64)
+        model = RouterClassifier(
+            config=config, n_estimators=12, max_depth=3, n_jobs=1, random_state=0
+        )
+        model.fit(X, y, verbose=False)
+        proba = model.predict_proba(X)
+        assert proba.shape == (n, 2)
+        assert np.allclose(proba.sum(axis=1), 1.0, atol=1e-4)
 
-    @pytest.mark.parametrize("config", ALL_CONFIGS, ids=lambda c: c.identifier)
-    def test_single_sample(self, config: SignalConfig):
-        model = RouterClassifier(config=config, num_classes=2)
-        x = torch.randn(1, config.input_dim)
-        out = model(x)
+    def test_single_row(self) -> None:
+        config = SignalConfig(use_q_emb=True)
+        rng = np.random.default_rng(1)
+        X = rng.standard_normal((1, config.input_dim)).astype(np.float32)
+        y = np.array([0], dtype=np.int64)
+        model = RouterClassifier(
+            config=config, n_estimators=8, max_depth=2, n_jobs=1, random_state=1
+        )
+        model.fit(X, y, verbose=False)
+        out = model.predict_proba(X)
         assert out.shape == (1, 2)
 
-    def test_custom_hidden_dim(self):
-        config = SignalConfig(use_q_emb=True)
-        model = RouterClassifier(config=config, hidden_dim=64, num_classes=2)
-        out = model(torch.randn(4, config.input_dim))
-        assert out.shape == (4, 2)
 
-
-class TestBottleneck:
-    def test_emb_compressor_exists_when_q_emb_active(self):
-        config = SignalConfig(use_q_emb=True)
-        model = RouterClassifier(config=config)
-        assert model.emb_compressor is not None
-        assert model.emb_compressor.in_features == Q_EMB_DIM
-        assert model.emb_compressor.out_features == EMB_COMPRESSED_DIM
-
-    def test_emb_compressor_absent_when_q_emb_inactive(self):
-        config = SignalConfig(use_q_feat=True)
-        model = RouterClassifier(config=config)
-        assert model.emb_compressor is None
-
-    def test_head_input_dim_with_emb(self):
-        # head should receive EMB_COMPRESSED_DIM + scalars, not the raw 384
-        config = SignalConfig(use_q_emb=True, use_probe=True)
-        model = RouterClassifier(config=config)
-        expected_head_in = EMB_COMPRESSED_DIM + PROBE_DIM
-        assert model.net[0].in_features == expected_head_in
-
-    def test_head_input_dim_scalars_only(self):
+class TestPredictConsistency:
+    def test_predict_matches_argmax_proba(self) -> None:
         config = SignalConfig(use_q_feat=True, use_probe=True)
-        model = RouterClassifier(config=config)
-        expected_head_in = Q_FEAT_DIM + PROBE_DIM
-        assert model.net[0].in_features == expected_head_in
-
-
-class TestGradients:
-    def test_backward_pass_runs(self):
-        config = SignalConfig(use_q_emb=True, use_q_feat=True, use_probe=True)
-        model = RouterClassifier(config=config)
-        x = torch.randn(4, config.input_dim)
-        y = torch.tensor([0, 1, 0, 1])
-        loss = torch.nn.CrossEntropyLoss()(model(x), y)
-        loss.backward()
-        for p in model.parameters():
-            assert p.grad is not None
+        rng = np.random.default_rng(2)
+        X = rng.standard_normal((32, config.input_dim)).astype(np.float32)
+        y = rng.integers(0, 2, size=32, dtype=np.int64)
+        model = RouterClassifier(
+            config=config, n_estimators=20, max_depth=4, n_jobs=1, random_state=2
+        )
+        model.fit(X, y, verbose=False)
+        p_cls = model.predict(X)
+        p_arg = np.argmax(model.predict_proba(X), axis=1)
+        np.testing.assert_array_equal(p_cls.astype(np.int64), p_arg.astype(np.int64))

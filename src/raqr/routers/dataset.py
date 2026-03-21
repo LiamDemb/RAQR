@@ -78,6 +78,16 @@ class RouterDataset(Dataset):
     def scaler(self) -> StandardScaler:
         return self._scaler
 
+    @property
+    def numpy_features(self) -> np.ndarray:
+        """Feature matrix for sklearn/XGBoost training (same order as `__getitem__`)."""
+        return self._features
+
+    @property
+    def numpy_labels(self) -> np.ndarray:
+        """Integer labels 0=Dense, 1=Graph."""
+        return self._labels
+
     def __len__(self) -> int:
         return len(self._features)
 

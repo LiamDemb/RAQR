@@ -1,72 +1,69 @@
-"""MLP classifier for routing queries to retrieval strategies."""
+"""XGBoost classifier for routing queries to retrieval strategies."""
 
 from __future__ import annotations
 
-import torch
-import torch.nn as nn
+from typing import Any
 
-from raqr.routers.signal_config import Q_EMB_DIM, SignalConfig
+import numpy as np
+from xgboost import XGBClassifier
 
-EMB_COMPRESSED_DIM = 32  # Bottleneck output size for Q-Emb
+from raqr.routers.signal_config import SignalConfig
+
+_DEFAULT_XGB_KWARGS: dict[str, Any] = {
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "tree_method": "hist",
+    "n_estimators": 1000,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 1,
+    "reg_lambda": 1.0,
+    "reg_alpha": 0.0,
+    "gamma": 0.0,
+    "n_jobs": -1,
+}
 
 
-class RouterClassifier(nn.Module):
-    """Late-fusion MLP classifier with an optional Q-Emb bottleneck.
+class RouterClassifier:
+    """Gradient-boosted trees on concatenated Q-Emb / Q-Feat / Probe features."""
 
-    When Q-Emb is active, the 384-dim embedding is first compressed to a
-    `EMB_COMPRESSED_DIM`-dimensional representation via a linear bottleneck
-    before being concatenated with scalar signals (Q-Feat / Probe). This
-    prevents the high-dimensional embeddings from drowning out the scalar
-    features in the MLP head.
-
-    Architecture (when all signals active):
-        Q-Emb (384) → Linear(384, 16) → LeakyReLU   ┐
-        Scalars (7)  → [pass-through]               ┴→ cat(23) → MLP head → 2
-    """
-
-    def __init__(
-        self,
-        config: SignalConfig,
-        hidden_dim: int = 128,
-        num_classes: int = 2,
-        dropout: float = 0.5,
-    ) -> None:
-        super().__init__()
+    def __init__(self, config: SignalConfig, **xgb_kwargs: Any) -> None:
         self.config = config
+        merged = {**_DEFAULT_XGB_KWARGS, **xgb_kwargs}
+        self._clf = XGBClassifier(**merged)
+        self._xgb_params = merged
 
-        # Bottleneck: only exists when Q-Emb is an active signal
-        self.emb_compressor: nn.Linear | None = None
-        if config.use_q_emb:
-            self.emb_compressor = nn.Linear(Q_EMB_DIM, EMB_COMPRESSED_DIM)
+    @property
+    def xgb_params(self) -> dict[str, Any]:
+        return dict(self._xgb_params)
 
-        # Head input dim = compressed emb (or 0) + all scalar features
-        emb_out = EMB_COMPRESSED_DIM if config.use_q_emb else 0
-        head_input_dim = emb_out + config.num_scalar_features
+    @property
+    def estimator(self) -> XGBClassifier:
+        """Underlying sklearn-compatible XGBoost model (for checkpoint I/O)."""
+        return self._clf
 
-        # LeakyReLU preserves negative semantic directions from embeddings
-        self.bottleneck_act = nn.LeakyReLU(negative_slope=0.1)
-        self.net = nn.Sequential(
-            nn.Linear(head_input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_classes),
-        )
+    def fit(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        *,
+        sample_weight: np.ndarray | None = None,
+        eval_set: list[tuple[np.ndarray, np.ndarray]] | None = None,
+        verbose: bool | int = False,
+    ) -> RouterClassifier:
+        """Fit the booster. Early stopping uses ``early_stopping_rounds`` from init (XGBoost 2.x)."""
+        kw: dict[str, Any] = {"verbose": verbose}
+        if sample_weight is not None:
+            kw["sample_weight"] = sample_weight
+        if eval_set is not None:
+            kw["eval_set"] = eval_set
+        self._clf.fit(X_train, y_train, **kw)
+        return self
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        parts: list[torch.Tensor] = []
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        return self._clf.predict(X)
 
-        offset = 0
-        if self.config.use_q_emb:
-            emb = x[:, offset : offset + Q_EMB_DIM]
-            parts.append(self.bottleneck_act(self.emb_compressor(emb)))  # type: ignore[arg-type]
-            offset += Q_EMB_DIM
-
-        # Remaining dimensions are scalar features (Q-Feat and/or Probe)
-        if offset < x.shape[1]:
-            parts.append(x[:, offset:])
-
-        combined = torch.cat(parts, dim=1)
-        return self.net(combined)
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        return self._clf.predict_proba(X)

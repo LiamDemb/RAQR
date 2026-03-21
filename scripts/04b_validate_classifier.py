@@ -19,28 +19,21 @@ import os
 import pickle
 from collections import Counter
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 import numpy as np
-import torch
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
     confusion_matrix,
     f1_score,
 )
-from torch.utils.data import DataLoader
 
-from raqr.routers import (
-    LABEL_NAMES,
-    RouterClassifier,
-    RouterDataset,
-    SignalConfig,
-)
+from raqr.routers import LABEL_NAMES, RouterDataset, SignalConfig
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +110,17 @@ def save_confusion_matrix_plot(
         return None
 
 
+def _load_checkpoint(model_path: Path) -> dict[str, Any]:
+    with open(model_path, "rb") as f:
+        data = pickle.load(f)
+    if isinstance(data, dict) and data.get("backend") == "xgboost":
+        return data
+    raise ValueError(
+        f"Unsupported checkpoint at {model_path}: expected pickle dict with "
+        "backend='xgboost'. Retrain with scripts/04a_train_classifier.py."
+    )
+
+
 def validate_single(
     config: SignalConfig,
     dev_path: str,
@@ -125,53 +129,57 @@ def validate_single(
     batch_size: int,
 ) -> dict:
     """Validate a single signal config. Returns a results dict."""
-    model_path = model_dir / f"classifier_{config.identifier}.pt"
+    pkl_path = model_dir / f"classifier_{config.identifier}.pkl"
+    legacy_pt = model_dir / f"classifier_{config.identifier}.pt"
     scaler_path = model_dir / f"scaler_{config.identifier}.pkl"
 
-    if not model_path.exists():
-        logger.warning("Model not found: %s — skipping", model_path)
+    if not pkl_path.exists():
+        if legacy_pt.exists():
+            logger.warning(
+                "Legacy PyTorch checkpoint found at %s — retrain to produce .pkl",
+                legacy_pt,
+            )
+        logger.warning("Model not found: %s — skipping", pkl_path)
         return {
             "identifier": config.identifier,
             "status": "SKIPPED",
             "reason": "model not found",
         }
 
-    checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
+    checkpoint = _load_checkpoint(pkl_path)
 
     with open(scaler_path, "rb") as f:
         scaler = pickle.load(f)
 
     dev_ds = RouterDataset(dev_path, config, scaler=scaler)
-    dev_loader = DataLoader(dev_ds, batch_size=batch_size, shuffle=False)
+    X_dev = dev_ds.numpy_features
+    y_dev = dev_ds.numpy_labels
 
-    # Rebuild the exact same architecture from the checkpoint's config flags
-    if "config_flags" in checkpoint:
-        # New checkpoints: reconstruct SignalConfig from stored flags
-        stored_config = SignalConfig(**checkpoint["config_flags"])
+    stored_flags = checkpoint.get("config_flags")
+    if stored_flags is not None:
+        stored_config = SignalConfig(**stored_flags)
     else:
-        # Legacy checkpoints: fall back to the config passed in
         stored_config = config
 
-    model = RouterClassifier(
-        config=stored_config,
-        hidden_dim=checkpoint["hidden_dim"],
-        dropout=checkpoint.get("dropout", 0.5),
-    )
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
+    if stored_config.identifier != config.identifier:
+        logger.warning(
+            "Checkpoint config %s does not match requested %s — using checkpoint",
+            stored_config.identifier,
+            config.identifier,
+        )
 
+    xgb_model = checkpoint["model"]
+    n = len(dev_ds)
     all_preds: list[int] = []
-    all_labels: list[int] = []
+    for start in range(0, n, batch_size):
+        end = min(start + batch_size, n)
+        batch = X_dev[start:end]
+        proba = xgb_model.predict_proba(batch)
+        preds = np.argmax(proba, axis=1)
+        all_preds.extend(preds.tolist())
 
-    with torch.no_grad():
-        for x, y in dev_loader:
-            logits = model(x)
-            preds = logits.argmax(dim=1)
-            all_preds.extend(preds.tolist())
-            all_labels.extend(y.tolist())
-
-    y_true = np.array(all_labels)
-    y_pred = np.array(all_preds)
+    y_true = y_dev.astype(np.int64)
+    y_pred = np.array(all_preds, dtype=np.int64)
 
     acc = accuracy_score(y_true, y_pred)
     macro_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
@@ -188,10 +196,8 @@ def validate_single(
     gate_f1 = macro_f1 > 0
     gate_pass = gate_acc and gate_f1
 
-    # Save confusion matrix plot
     fig_path = save_confusion_matrix_plot(cm, config.identifier, results_dir)
 
-    # Save per-config gate report
     status = "PASSED" if gate_pass else "FAILED"
     report_path = results_dir / f"gate_report_{config.identifier}.txt"
     with open(report_path, "w") as f:

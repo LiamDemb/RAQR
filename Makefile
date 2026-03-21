@@ -130,17 +130,20 @@ build-router-dataset-undersample:
 		$(if $(DELTA),--delta $(DELTA))
 		
 
-# Phase 4: Train classifier router. SIGNALS=q_emb,q_feat,probe (comma-separated)
+# Phase 4: Train classifier router (XGBoost). SIGNALS=q_emb,q_feat,probe (comma-separated)
 SIGNALS ?= q_emb,q_feat,probe
-EPOCHS ?= 100
+N_ESTIMATORS ?= 1000
+EARLY_STOPPING_ROUNDS ?= 40
 RESULTS_DIR ?= results
 
 train-classifier:
 	poetry run python scripts/04a_train_classifier.py \
 		--signals "$(SIGNALS)" \
-		--epochs $(EPOCHS) \
-		$(if $(LR),--lr $(LR)) \
-		$(if $(BATCH_SIZE),--batch-size $(BATCH_SIZE))
+		--n-estimators $(N_ESTIMATORS) \
+		--early-stopping-rounds $(EARLY_STOPPING_ROUNDS) \
+		$(if $(MAX_DEPTH),--max-depth $(MAX_DEPTH)) \
+		$(if $(LEARNING_RATE),--learning-rate $(LEARNING_RATE)) \
+		$(if $(N_JOBS),--n-jobs $(N_JOBS))
 
 # Phase 4: Validate classifier against gate metrics
 validate-classifier:
@@ -160,11 +163,11 @@ train-all-classifiers:
 		echo "─── Training: $$sig ───"; \
 		poetry run python scripts/04a_train_classifier.py \
 			--signals "$$sig" \
-			--epochs $(EPOCHS) \
-			--hidden-dim 64 \
-			--weight-decay 0.05 \
-			--lr 3e-4 \
-			$(if $(BATCH_SIZE),--batch-size $(BATCH_SIZE)); \
+			--n-estimators $(N_ESTIMATORS) \
+			--early-stopping-rounds $(EARLY_STOPPING_ROUNDS) \
+			--max-depth 6 \
+			--learning-rate 0.05 \
+			$(if $(N_JOBS),--n-jobs $(N_JOBS)); \
 	done
 	@echo ""
 	@echo "═══════════════════════════════════════════════════"
