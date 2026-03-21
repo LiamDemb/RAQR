@@ -163,7 +163,7 @@ train-all-classifiers:
 			--epochs $(EPOCHS) \
 			--hidden-dim 64 \
 			--weight-decay 0.05 \
-			$(if $(LR),--lr $(LR)) \
+			--lr 3e-4 \
 			$(if $(BATCH_SIZE),--batch-size $(BATCH_SIZE)); \
 	done
 	@echo ""
