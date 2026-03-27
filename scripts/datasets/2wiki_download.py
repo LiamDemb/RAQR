@@ -7,22 +7,32 @@ See: https://huggingface.co/datasets/framolfese/2WikiMultihopQA
 
 Splits: train, validation, test
 Types: bridge_comparison, comparison, etc.
+
+Wikipedia validation: HTTP HEAD on each supporting title’s /wiki/ URL (no redirects);
+exact URL must return 200. See scripts/datasets/_common.py.
 """
 
+from __future__ import annotations
+
 import argparse
+import sys
 from pathlib import Path
 
-from datasets import load_dataset, Dataset
+from datasets import Dataset, load_dataset
+from tqdm import tqdm
 
-from raqr.data.wikipedia_find_page import wikipedia_find_page
+_DATASETS_DIR = Path(__file__).resolve().parent
+if str(_DATASETS_DIR) not in sys.path:
+    sys.path.insert(0, str(_DATASETS_DIR))
+
+import _common  # noqa: E402
 
 
-def titles_exist(x):
-    titles = set(x["supporting_facts"]["title"])
-    for t in titles:
-        if not wikipedia_find_page(t):
-            return False
-    return True
+def titles_exist(row: dict, *, wiki_language: str) -> bool:
+    return _common.titles_all_exist_head(
+        _common.twowiki_supporting_titles(row),
+        language=wiki_language,
+    )
 
 
 def main(
@@ -30,6 +40,7 @@ def main(
     num_samples: int | None,
     output_file: str,
     types: str | None,
+    wiki_language: str,
 ) -> None:
     ds = load_dataset("framolfese/2WikiMultihopQA", split=split)
 
@@ -44,12 +55,22 @@ def main(
     if num_samples is not None and num_samples > 0:
         valid_rows = []
 
-        for row in ds:
-            if titles_exist(row):
-                valid_rows.append(row)
+        with tqdm(
+            total=num_samples,
+            desc="Valid samples",
+            unit="sample",
+            mininterval=0.2,
+        ) as pbar:
+            rows_scanned = 0
+            for row in ds:
+                rows_scanned += 1
+                pbar.set_postfix(rows_scanned=rows_scanned, refresh=True)
+                if titles_exist(row, wiki_language=wiki_language):
+                    valid_rows.append(row)
+                    pbar.update(1)
 
-            if len(valid_rows) >= num_samples:
-                break
+                if len(valid_rows) >= num_samples:
+                    break
 
         ds = Dataset.from_list(valid_rows)
 
@@ -62,7 +83,7 @@ def main(
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(
-        description="Download 2WikiMultiHopQA from Hugging Face (framolfese/2WikiMultihopQA)"
+        description="Download 2WikiMultihopQA from Hugging Face (framolfese/2WikiMultihopQA)"
     )
     p.add_argument(
         "--split",
@@ -90,6 +111,12 @@ if __name__ == "__main__":
         help="Comma-separated question types to keep (e.g. bridge_comparison,comparison). "
         "Default: all types.",
     )
+    p.add_argument(
+        "--wiki-language",
+        type=str,
+        default="en",
+        help="Wikipedia language for HEAD checks (default: en).",
+    )
     args = p.parse_args()
 
     output_file = args.output_file or f"data/raw/2wikimultihop_{args.num_samples}.jsonl"
@@ -99,4 +126,5 @@ if __name__ == "__main__":
         num_samples=args.num_samples,
         output_file=output_file,
         types=args.types,
+        wiki_language=args.wiki_language,
     )

@@ -160,8 +160,7 @@ Responsible for ingesting datasets and normalizing them into a standard schema.
         "question_id": "uuid",
         "question": "Who was...",
         "gold_answers": ["Expected string 1", "Expected string 2"],
-        "dataset_source": "nq|2wiki",
-        "split": "train|dev|test"
+        "dataset_source": "nq|2wiki"
     }
     ```
 
@@ -228,7 +227,7 @@ The codebase is organized to run in **4 sequential stages**:
 ### Stage 1: Ingestion (Data Prep)
 
 - **Scripts:** `python scripts/01_ingest_data.py` and `python scripts/01_build_corpus.py`
-- **Action:** Build the benchmark (splits) first, then build the unified chunked corpus (plus enrichment) and retrieval artifacts (FAISS + metadata table + NetworkX graph), per `docs/Corpus Creation Strategy.md`.
+- **Action:** Build the benchmark, then build the unified chunked corpus (plus enrichment) and retrieval artifacts (FAISS + metadata table + NetworkX graph), per `docs/Corpus Creation Strategy.md`. Train/dev/test splits for the router are applied later when building `labeled_*.jsonl`.
 - **Artifacts:** `data/processed/corpus.jsonl`, `data/processed/vector_index.faiss`, `data/processed/vector_meta.parquet`, `data/processed/graph.pkl` (and optional docstore).
 
 ### Stage 2: Oracle Label Generation (The "Ground Truth")

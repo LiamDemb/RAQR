@@ -52,8 +52,9 @@ def build_router_dataset_rows(
 ) -> Iterable[dict]:
     """Build router dataset rows from oracle_raw_scores items.
 
-    Each item must have: question_id, question, gold_answers, pred_dense, pred_graph,
-    split, dataset_source (optional).
+    Each item must have: question_id, question, gold_answers, pred_dense, pred_graph.
+    Optional: dataset_source, split (placeholder; final train/dev/test comes from
+    build_router_dataset stratified split).
 
     Yields dicts with: question_id, question, split, dataset_source, question_embedding,
     gold_answers, gold_label, f1_dense, f1_graph, em_dense, em_graph, pred_dense, pred_graph,
@@ -67,7 +68,8 @@ def build_router_dataset_rows(
             continue
 
         question_id = item.get("question_id", "")
-        split = item.get("split", "train")
+        # Placeholder until build_router_dataset assigns stratified train/dev/test.
+        split = item.get("split") or "train"
         dataset_source = item.get("dataset_source", "")
         gold_raw = item.get("gold_answers", [])
         gold_answers = _normalize_gold_answers(gold_raw)

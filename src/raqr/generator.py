@@ -6,6 +6,8 @@ import time
 from openai import OpenAI
 import os
 
+from raqr.generation.answer_prefix import strip_answer_prefix
+
 
 class Generator(Protocol):
     def generate(self, query: str, context: List[str]) -> "GenerationResult": ...
@@ -70,11 +72,8 @@ class SimpleLLMGenerator:
             response.choices[0].message.content if context else "No context provided."
         )
 
-        # Parse answer (get rid of reasoning chain)
-        if "Answer:" in answer:
-            final_answer = answer.split("Answer:", 1)[1].strip()
-        else:
-            final_answer = answer
+        # Parse answer (strip "answer:" / "Answer:" / … and text before final marker)
+        final_answer = strip_answer_prefix(answer)
 
         end_time = time.perf_counter()
         latency_ms = (end_time - start_time) * 1000

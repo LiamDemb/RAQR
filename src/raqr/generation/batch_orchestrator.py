@@ -7,21 +7,26 @@ from pathlib import Path
 from typing import Optional
 
 from openai import OpenAI
+from tqdm.auto import tqdm
 
-from raqr.generation.batch import BatchRecorderGenerator, build_batch_line, parse_generation_output
+from raqr.generation.batch import (
+    BatchRecorderGenerator,
+    build_batch_line,
+    parse_generation_output,
+)
+from raqr.openai_batch_limits import batch_limit_requests
 from raqr.prompts import get_generator_prompt
 from raqr.strategies.factory import build_dense_strategy, build_graph_strategy
 
 logger = logging.getLogger(__name__)
 
-BATCH_LIMIT_REQUESTS = 50_000
 BATCH_LIMIT_BYTES = 200 * 1024 * 1024
 SHARD_PREFIX = "batch_input_strategy"
 STATE_FILENAME = "batch_state_strategy.json"
 OUTPUT_FILENAME = "oracle_raw_scores.jsonl"
 
 
-def _load_benchmark(path: Path, limit: int | None, exclude_test: bool) -> list[dict]:
+def _load_benchmark(path: Path, limit: int | None) -> list[dict]:
     samples = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -29,8 +34,6 @@ def _load_benchmark(path: Path, limit: int | None, exclude_test: bool) -> list[d
             if not line:
                 continue
             obj = json.loads(line)
-            if exclude_test and obj.get("split") == "test":
-                continue
             samples.append(obj)
             if limit and len(samples) >= limit:
                 break
@@ -38,11 +41,10 @@ def _load_benchmark(path: Path, limit: int | None, exclude_test: bool) -> list[d
 
 
 def submit_batches(
-    benchmark_path: Path, 
-    output_dir: Path, 
-    limit: Optional[int] = None, 
-    include_test: bool = False, 
-    completion_window: str = "24h"
+    benchmark_path: Path,
+    output_dir: Path,
+    limit: Optional[int] = None,
+    completion_window: str = "24h",
 ) -> int:
     """Submit OpenAI Batch for strategy generation and write state file. Returns exit code."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -50,15 +52,12 @@ def submit_batches(
     samples = _load_benchmark(
         benchmark_path,
         limit=limit,
-        exclude_test=not include_test,
     )
     if not samples:
-        logger.error("No samples to process (check --limit and splits).")
+        logger.error("No samples to process (check --limit and benchmark file).")
         return 1
 
-    logger.info(
-        "Loaded %d samples (Test excluded: %s)", len(samples), not include_test
-    )
+    logger.info("Loaded %d benchmark samples.", len(samples))
 
     # Load existing oracle scores to skip completed questions ──
     existing_scores_path = output_dir / OUTPUT_FILENAME
@@ -76,7 +75,7 @@ def submit_batches(
                 qid = row.get("question_id", "")
                 has_dense = bool(row.get("pred_dense"))
                 has_graph = bool(row.get("pred_graph"))
-                if qid and has_dense and has_graph:
+                if qid and has_dense:  # removed and had_graph
                     completed_qids.add(qid)
         if completed_qids:
             logger.info(
@@ -101,6 +100,21 @@ def submit_batches(
     graph.generator = recorder
 
     skipped = 0
+    pending_samples = [
+        sample
+        for sample in samples
+        if sample.get("question", "").strip()
+        and sample.get("question_id", "") not in completed_qids
+    ]
+    progress = None
+    if pending_samples:
+        progress = tqdm(
+            total=len(pending_samples),
+            desc="Preparing strategy requests",
+            unit="question",
+            dynamic_ncols=True,
+        )
+
     for sample in samples:
         question = sample.get("question", "").strip()
         qid = sample.get("question_id", "")
@@ -113,6 +127,11 @@ def submit_batches(
         dense.retrieve_and_generate(question)
         recorder.next_custom_id = f"{qid}_graph"
         graph.retrieve_and_generate(question)
+        if progress is not None:
+            progress.update(1)
+
+    if progress is not None:
+        progress.close()
 
     if skipped:
         logger.info(
@@ -136,9 +155,13 @@ def submit_batches(
         return 0
 
     logger.info(
+        "All query entities extracted. Batch prompts are ready; building batch JSONL and preparing upload..."
+    )
+    logger.info(
         "Recorded %d requests. Building batch JSONL...", len(recorder.recorded_requests)
     )
 
+    limit_requests = batch_limit_requests()
     shards: list[dict] = []
     shard_idx = 0
     shard_count = 0
@@ -185,7 +208,7 @@ def submit_batches(
         line_bytes = len(line_json.encode("utf-8"))
 
         if shard_count > 0 and (
-            shard_count >= BATCH_LIMIT_REQUESTS
+            shard_count >= limit_requests
             or shard_bytes + line_bytes > BATCH_LIMIT_BYTES
         ):
             flush_shard()
@@ -221,13 +244,15 @@ def submit_batches(
     return 0
 
 
-def collect_batches(state_path: Path, output_dir: Path, output_file: Optional[Path] = None) -> int:
+def collect_batches(
+    state_path: Path, output_dir: Path, output_file: Optional[Path] = None
+) -> int:
     """Collect strategy batch results and save to JSONL. Returns exit code."""
     import re
-    
+
     # Match "{question_id}_{strategy}" where question_id can contain any non-underscore-suffix chars
     CUSTOM_ID_PATTERN = re.compile(r"^(.+)_(dense|graph)$")
-    
+
     if not state_path.is_file():
         logger.error("State file not found: %s", state_path)
         return 1
@@ -241,7 +266,9 @@ def collect_batches(state_path: Path, output_dir: Path, output_file: Optional[Pa
         logger.error("No shards in state file.")
         return 1
     if not samples:
-        logger.error("No samples in state file. Re-submit with a state that includes samples.")
+        logger.error(
+            "No samples in state file. Re-submit with a state that includes samples."
+        )
         return 1
 
     output_path = output_file if output_file else output_dir / OUTPUT_FILENAME
@@ -255,7 +282,9 @@ def collect_batches(state_path: Path, output_dir: Path, output_file: Optional[Pa
     client = OpenAI(api_key=api_key)
 
     # ── Incremental: load existing oracle scores as a baseline ──
-    existing_preds: dict[str, dict[str, str]] = {}  # qid -> {"dense": ..., "graph": ...}
+    existing_preds: dict[str, dict[str, str]] = (
+        {}
+    )  # qid -> {"dense": ..., "graph": ...}
     if output_path.is_file():
         with output_path.open("r", encoding="utf-8") as ef:
             for line in ef:
@@ -273,7 +302,11 @@ def collect_batches(state_path: Path, output_dir: Path, output_file: Optional[Pa
                         "graph": row.get("pred_graph", ""),
                     }
         if existing_preds:
-            logger.info("Loaded %d existing predictions from %s.", len(existing_preds), output_path)
+            logger.info(
+                "Loaded %d existing predictions from %s.",
+                len(existing_preds),
+                output_path,
+            )
 
     answers_by_id: dict[str, str] = {}
     completed = 0
@@ -285,10 +318,16 @@ def collect_batches(state_path: Path, output_dir: Path, output_file: Optional[Pa
             continue
         batch = client.batches.retrieve(batch_id)
         if batch.status != "completed":
-            logger.warning("Shard batch %s not completed (status=%s). Skipping.", batch_id, batch.status)
+            logger.warning(
+                "Shard batch %s not completed (status=%s). Skipping.",
+                batch_id,
+                batch.status,
+            )
             continue
 
-        output_file_id = getattr(batch, "output_file_id", None) or getattr(batch, "output_file", None)
+        output_file_id = getattr(batch, "output_file_id", None) or getattr(
+            batch, "output_file", None
+        )
         if not output_file_id:
             logger.warning("Shard batch %s has no output file.", batch_id)
             continue
@@ -324,7 +363,9 @@ def collect_batches(state_path: Path, output_dir: Path, output_file: Optional[Pa
         strategy = m.group(2)
         by_qid.setdefault(qid, {})[strategy] = answer
 
-    logger.info("Writing %s (one line per question, pred_dense + pred_graph)...", output_path)
+    logger.info(
+        "Writing %s (one line per question, pred_dense + pred_graph)...", output_path
+    )
     with output_path.open("w", encoding="utf-8") as out:
         for sample in samples:
             row = dict(sample)
@@ -349,4 +390,3 @@ def collect_batches(state_path: Path, output_dir: Path, output_file: Optional[Pa
     )
     print(f"Output: {output_path}")
     return 0
-

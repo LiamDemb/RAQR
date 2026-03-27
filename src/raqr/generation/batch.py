@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from raqr.generation.answer_prefix import strip_answer_prefix
 from raqr.generator import GenerationResult
 from raqr.prompts import GENERATOR_SYSTEM_MESSAGE
 
@@ -91,10 +92,8 @@ def parse_generation_output(line: Dict[str, Any]) -> tuple[str, str]:
     msg = choices[0].get("message") or {}
     content = msg.get("content") or ""
 
-    # Parse answer (strip "Answer:" prefix if present, matching SimpleLLMGenerator)
-    if "Answer:" in content:
-        content = content.split("Answer:", 1)[1].strip()
-    return (custom_id, content.strip())
+    content = strip_answer_prefix(content)
+    return (custom_id, content)
 
 
 @dataclass

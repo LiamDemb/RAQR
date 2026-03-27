@@ -85,6 +85,9 @@ def main() -> int:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -108,8 +111,7 @@ def main() -> int:
         benchmark_path=benchmark_path,
         output_dir=output_dir,
         limit=args.limit,
-        include_test=False,
-        completion_window="24h"
+        completion_window="24h",
     )
     if exit_code != 0:
         logger.error("Submit failed.")
@@ -144,11 +146,15 @@ def main() -> int:
             logger.error("One or more batches failed or timed out.")
             return 1
 
-    # 3. Collect Batch
-    if output_path.is_file() and not args.no_wait:
-        logger.info("Output already exists at %s. Skipping collect.", output_path)
-    elif not args.no_wait:
-        logger.info("Collecting batch results...")
+    # 3. Collect Batch — always merge when we have shards (collect_batches loads existing
+    # oracle_raw_scores.jsonl and merges new batch answers; see batch_orchestrator.collect_batches).
+    if args.no_wait:
+        logger.info(
+            "Skipping collect (--no-wait). When batches complete, run: "
+            "make collect-answer-batch"
+        )
+    else:
+        logger.info("Collecting batch results into %s (merges with existing file if any)...", output_path)
         exit_code = collect_batches(state_path=state_path, output_dir=output_dir)
         if exit_code != 0:
             logger.error("Collect failed.")

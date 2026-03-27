@@ -21,7 +21,6 @@ def normalize_question(text: str) -> str:
     return " ".join(text.lower().strip().split())
 
 
-
 def write_jsonl(path: Path, items: Iterable[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
@@ -73,7 +72,6 @@ def _load_existing_benchmark(path: Path) -> List[BenchmarkItem]:
                     question=row["question"],
                     gold_answers=row["gold_answers"],
                     dataset_source=row["dataset_source"],
-                    split=row["split"],
                     dataset_version=row.get("dataset_version"),
                 )
             )
@@ -100,7 +98,9 @@ def main() -> int:
         help="Output directory for processed artifacts.",
     )
     parser.add_argument("--nq-version", default=os.getenv("NQ_VERSION"))
-    parser.add_argument("--2wiki-version", dest="wiki2_version", default=os.getenv("2WIKI_VERSION"))
+    parser.add_argument(
+        "--2wiki-version", dest="wiki2_version", default=os.getenv("2WIKI_VERSION")
+    )
     args = parser.parse_args()
 
     dataset_paths = [
@@ -151,7 +151,7 @@ def main() -> int:
     sources_loaded = sorted(new_by_source.keys())
     logger.info("New datasets included: %s", ", ".join(sources_loaded))
 
-    # ── Assign split='unassigned' to all new items — final split done later ──
+    # ── New items (train/dev/test split is applied later in build_router_dataset) ──
     new_items: List[BenchmarkItem] = []
     for source, items in new_by_source.items():
         for item in items:
@@ -161,7 +161,6 @@ def main() -> int:
                     question=item.question,
                     gold_answers=item.gold_answers,
                     dataset_source=item.dataset_source,
-                    split="unassigned",
                     dataset_version=item.dataset_version,
                 )
             )

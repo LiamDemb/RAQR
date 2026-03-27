@@ -1,6 +1,6 @@
 import json
 
-path = "/Users/liamdemb/Downloads/batch_69a99d2afb34819097143b9184253a59_output.jsonl"  # <- change this
+path = "/Users/liamdemb/Downloads/batch_69c2287613bc8190805560d136125cc6_output.jsonl"  # <- change this
 
 tot_prompt = 0
 tot_completion = 0

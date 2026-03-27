@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import email.utils
+import logging
+import os
+import random
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import requests
 
 WIKI_API = "https://en.wikipedia.org/w/api.php"
 USER_AGENT = "RAQR/0.1 (research corpus build)"
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_MAX_RETRIES = 8
+_DEFAULT_MAX_BACKOFF_S = 90.0
 
 
 @dataclass(frozen=True)
@@ -21,9 +30,48 @@ class WikiPage:
 
 
 class WikipediaClient:
-    def __init__(self, throttle_s: float = 0.1) -> None:
+    def __init__(
+        self,
+        throttle_s: float = 0.1,
+        *,
+        oauth2_access_token: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        max_backoff_s: Optional[float] = None,
+    ) -> None:
         self.throttle_s = throttle_s
         self._last_call = 0.0
+        self._max_retries = (
+            int(max_retries)
+            if max_retries is not None
+            else int(os.environ.get("WIKIPEDIA_MAX_RETRIES", str(_DEFAULT_MAX_RETRIES)))
+        )
+        self._max_backoff_s = (
+            float(max_backoff_s)
+            if max_backoff_s is not None
+            else float(
+                os.environ.get("WIKIPEDIA_MAX_BACKOFF_S", str(_DEFAULT_MAX_BACKOFF_S))
+            )
+        )
+
+        token = oauth2_access_token
+        if token is None:
+            token = os.environ.get("WIKIMEDIA_OAUTH2_ACCESS_TOKEN", "").strip() or None
+        elif not str(token).strip():
+            token = None
+
+        self._session = requests.Session()
+        self._session.headers.update(
+            {
+                "User-Agent": USER_AGENT,
+                "Accept-Encoding": "gzip",
+            }
+        )
+        if token:
+            self._session.headers["Authorization"] = f"Bearer {token}"
+
+    @property
+    def oauth2_authenticated(self) -> bool:
+        return "Authorization" in self._session.headers
 
     def _sleep_if_needed(self) -> None:
         delta = time.time() - self._last_call
@@ -31,16 +79,63 @@ class WikipediaClient:
             time.sleep(self.throttle_s - delta)
         self._last_call = time.time()
 
+    @staticmethod
+    def _retry_after_seconds(resp: requests.Response) -> float | None:
+        raw = resp.headers.get("Retry-After")
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+        try:
+            dt = email.utils.parsedate_to_datetime(raw)
+            if dt is not None:
+                return max(0.0, dt.timestamp() - time.time())
+        except (TypeError, OSError, ValueError):
+            pass
+        return None
+
+    def _cap_backoff(self, s: float) -> float:
+        return min(max(0.0, s), self._max_backoff_s)
+
     def _get(self, params: Dict[str, str]) -> dict:
         self._sleep_if_needed()
-        resp = requests.get(
-            WIKI_API,
-            params=params,
-            headers={"User-Agent": USER_AGENT},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        last_resp: requests.Response | None = None
+        for attempt in range(self._max_retries):
+            try:
+                resp = self._session.get(WIKI_API, params=params, timeout=30)
+            except requests.RequestException:
+                if attempt == self._max_retries - 1:
+                    raise
+                time.sleep(
+                    self._cap_backoff(2.0**attempt + random.random()),
+                )
+                continue
+
+            last_resp = resp
+            if resp.status_code == 429:
+                ra = self._retry_after_seconds(resp)
+                delay = (
+                    self._cap_backoff(ra)
+                    if ra is not None and ra > 0
+                    else self._cap_backoff(2.0**attempt + random.random())
+                )
+                logger.warning(
+                    "Wikipedia API 429; retry in %.1fs (attempt %d/%d)",
+                    delay,
+                    attempt + 1,
+                    self._max_retries,
+                )
+                time.sleep(delay)
+                continue
+
+            resp.raise_for_status()
+            return resp.json()
+
+        if last_resp is not None:
+            last_resp.raise_for_status()
+        raise RuntimeError("Wikipedia API request failed after retries")
 
     def resolve_title(self, title: str) -> Optional[str]:
         data = self._get(
