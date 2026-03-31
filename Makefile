@@ -157,13 +157,11 @@ SIGNALS ?= q_emb,q_feat,probe
 EPOCHS ?= 100
 RESULTS_DIR ?= results
 
-# Dissertation figures (see scripts/evaluation/). Oracle distribution needs two router builds:
-# ROUTER_DIR_BEFORE = e.g. unbalanced labeled_* trees; ROUTER_DIR_AFTER = undersampled (default data/training).
+# Dissertation figures (see scripts/evaluation/). Oracle split chart reads labeled_*.jsonl from:
+ROUTER_DATA_DIR ?= data/training
 FIGURES_DIR ?= figures
 MODEL_DIR ?= models
 ROUTER_TEST_PATH ?= data/training/labeled_test.jsonl
-ROUTER_DIR_BEFORE ?= data/training_unbalanced
-ROUTER_DIR_AFTER ?= data/training
 
 train-classifier:
 	poetry run python scripts/04a_train_classifier.py \
@@ -211,8 +209,7 @@ figures: figure-oracle-dist figure-ablation-f1 figure-confusion figure-e2e figur
 
 figure-oracle-dist:
 	poetry run python scripts/evaluation/plot_oracle_label_distribution.py \
-		--before-dir "$(ROUTER_DIR_BEFORE)" \
-		--after-dir "$(ROUTER_DIR_AFTER)" \
+		--data-dir "$(ROUTER_DATA_DIR)" \
 		--output "$(FIGURES_DIR)/oracle_label_distribution.pdf"
 
 figure-ablation-f1:
@@ -241,6 +238,8 @@ figure-regret:
 		--model-dir "$(MODEL_DIR)" \
 		--output "$(FIGURES_DIR)/routing_regret_severity.pdf"
 
+# Writes router_permutation_importance.pdf (all signals). If another ablation has
+# higher macro-F1 on the split, also writes router_permutation_importance_<id>.pdf.
 figure-permutation:
 	poetry run python scripts/evaluation/plot_permutation_importance.py \
 		--split-path "$(ROUTER_TEST_PATH)" \

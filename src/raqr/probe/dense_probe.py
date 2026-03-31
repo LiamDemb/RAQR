@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import logging
 from pathlib import Path
 from typing import Optional
@@ -17,7 +18,6 @@ from .signals import ProbeSignals
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TOP_K = 30
 DEFAULT_MODEL_NAME = "all-MiniLM-L6-v2"
 
 
@@ -70,7 +70,7 @@ def run_probe(
     index_path: str,
     meta_path: str,
     model_name: str = DEFAULT_MODEL_NAME,
-    top_k: int = DEFAULT_TOP_K,
+    top_k: int = int(os.getenv("PROBE_TOP_K", 30)),
 ) -> ProbeSignals:
     """Run a dense probe and return ProbeSignals."""
     index = faiss.read_index(index_path)

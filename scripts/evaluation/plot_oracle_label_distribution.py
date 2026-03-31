@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bar chart: oracle gold label counts before vs after undersampling (seaborn)."""
+"""Grouped bar chart: Dense vs Graph counts per split (Train, Dev, Test)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import argparse
 import json
 import logging
 import sys
-from collections import Counter
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -21,41 +20,44 @@ from _figure_utils import apply_default_style, savefig_pdf
 
 logger = logging.getLogger(__name__)
 
-SPLITS = ("labeled_train.jsonl", "labeled_dev.jsonl", "labeled_test.jsonl")
+# (display name, filename under data-dir)
+SPLIT_SPECS: tuple[tuple[str, str], ...] = (
+    ("Train", "labeled_train.jsonl"),
+    ("Dev", "labeled_dev.jsonl"),
+    ("Test", "labeled_test.jsonl"),
+)
+
+LABEL_ORDER = ["Dense", "Graph"]
 
 
-def _count_labels(router_dir: Path) -> Counter[str]:
-    c: Counter[str] = Counter()
-    for name in SPLITS:
-        fp = router_dir / name
-        if not fp.is_file():
-            logger.warning("Missing %s — skipping.", fp)
-            continue
-        with fp.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                lab = row.get("gold_label")
-                if lab in ("Dense", "Graph"):
-                    c[lab] += 1
-    return c
+def _count_labels_in_file(path: Path) -> tuple[int, int]:
+    """Return (n_dense, n_graph)."""
+    n_dense = n_graph = 0
+    if not path.is_file():
+        logger.warning("Missing %s — counts will be zero.", path)
+        return 0, 0
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            lab = row.get("gold_label")
+            if lab == "Dense":
+                n_dense += 1
+            elif lab == "Graph":
+                n_graph += 1
+    return n_dense, n_graph
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
-        description="Oracle label distribution before/after undersampling."
+        description="Oracle gold-label counts by split (grouped bar chart)."
     )
     p.add_argument(
-        "--before-dir",
-        required=True,
-        help="Router dataset dir without undersampling (e.g. data/training_unbalanced).",
-    )
-    p.add_argument(
-        "--after-dir",
-        required=True,
-        help="Router dataset dir with undersampling (e.g. data/training).",
+        "--data-dir",
+        default="data/training",
+        help="Directory containing labeled_train.jsonl, labeled_dev.jsonl, labeled_test.jsonl.",
     )
     p.add_argument(
         "--output", type=Path, default=Path("figures/oracle_label_distribution.pdf")
@@ -64,40 +66,45 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    before_dir = Path(args.before_dir)
-    after_dir = Path(args.after_dir)
-    cb = _count_labels(before_dir)
-    ca = _count_labels(after_dir)
-    if not cb and not ca:
-        logger.error("No labeled files found in either directory.")
+    data_dir = Path(args.data_dir)
+    plot_rows: list[dict] = []
+    for split_name, fname in SPLIT_SPECS:
+        n_d, n_g = _count_labels_in_file(data_dir / fname)
+        plot_rows.append(
+            {"split": split_name, "gold_label": "Dense", "count": n_d}
+        )
+        plot_rows.append(
+            {"split": split_name, "gold_label": "Graph", "count": n_g}
+        )
+
+    if sum(r["count"] for r in plot_rows) == 0:
+        logger.error("No gold_label rows found under %s.", data_dir)
         return 1
 
-    before_rows: list[dict] = []
-    for lab, n in cb.items():
-        before_rows.extend(
-            [{"stage": "Before undersampling", "gold_label": lab} for _ in range(n)]
-        )
-    after_rows: list[dict] = []
-    for lab, n in ca.items():
-        after_rows.extend(
-            [{"stage": "After undersampling", "gold_label": lab} for _ in range(n)]
-        )
-    long_df = pd.DataFrame(before_rows + after_rows)
-    if long_df.empty:
-        logger.error("No gold_label rows to plot.")
-        return 1
+    df = pd.DataFrame(plot_rows)
+    df["split"] = pd.Categorical(
+        df["split"], categories=[s for s, _ in SPLIT_SPECS], ordered=True
+    )
+    df["gold_label"] = pd.Categorical(
+        df["gold_label"], categories=LABEL_ORDER, ordered=True
+    )
+
     apply_default_style()
-    fig, ax = plt.subplots(figsize=(6, 4))
-    sns.countplot(
-        data=long_df,
-        x="gold_label",
-        hue="stage",
-        order=["Dense", "Graph"],
+    fig, ax = plt.subplots(figsize=(6.5, 4))
+    sns.barplot(
+        data=df,
+        x="split",
+        y="count",
+        hue="gold_label",
+        hue_order=LABEL_ORDER,
         ax=ax,
+        palette={"Dense": "steelblue", "Graph": "darkorange"},
     )
     ax.set_ylabel("Count")
-    ax.set_xlabel("Gold label")
-    ax.set_title("Oracle label distribution")
+    ax.set_xlabel("")
+    ax.set_title("Oracle label distribution by split")
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles, labels, title="Gold label", loc="upper right")
     fig.tight_layout()
     savefig_pdf(fig, Path(args.output))
     logger.info("Wrote %s", args.output)

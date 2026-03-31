@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import os
 
 from raqr.routers.signal_config import Q_EMB_DIM, SignalConfig
 
-EMB_COMPRESSED_DIM = 32  # Bottleneck output size for Q-Emb
+EMB_COMPRESSED_DIM = int(
+    os.getenv("EMB_COMPRESSED_DIM", 32)
+)  # Bottleneck output size for Q-Emb
 
 
 class RouterClassifier(nn.Module):

@@ -95,7 +95,6 @@ DEFAULT_OUTPUT_DIR = "data/training"
 DEFAULT_EMBED_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_PROBE_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_DELTA = 0.05
-DEFAULT_PROBE_TOP_K = 30
 
 
 def main() -> int:
@@ -115,8 +114,8 @@ def main() -> int:
     parser.add_argument(
         "--probe-top-k",
         type=int,
-        default=DEFAULT_PROBE_TOP_K,
-        help=f"Probe top-k (default: {DEFAULT_PROBE_TOP_K}).",
+        default=int("PROBE_TOP_K", 30),
+        help=f"Probe top-k (default: 30).",
     )
     parser.add_argument(
         "--probe-model",
@@ -148,10 +147,10 @@ def main() -> int:
     parser.add_argument(
         "--disagreement-threshold",
         type=float,
-        default=float(os.getenv(DEFAULT_DISAGREEMENT_THRESHOLD, 0.7)),
+        default=float(os.getenv("DISAGREEMENT_THRESHOLD", 0.5)),
         help=(
             'F1 threshold for "correct" per strategy when using --train-disagreement '
-            f"(default: {DEFAULT_DISAGREEMENT_THRESHOLD})."
+            f"(default: 0.5)."
         ),
     )
     args = parser.parse_args()

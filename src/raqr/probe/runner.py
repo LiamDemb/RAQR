@@ -6,10 +6,10 @@ import faiss
 import numpy as np
 from scipy.stats import skew
 from sentence_transformers import SentenceTransformer
+import os
 
 from .dense_probe import (
     DEFAULT_MODEL_NAME,
-    DEFAULT_TOP_K,
     _compute_semantic_dispersion,
     _compute_standard_deviation,
 )
@@ -23,7 +23,7 @@ class DenseProbeRunner:
         index_path: str,
         meta_path: str,
         model_name: str = DEFAULT_MODEL_NAME,
-        top_k: int = DEFAULT_TOP_K,
+        top_k: int = int(os.getenv("PROBE_TOP_K", 30)),
     ) -> None:
         self.index_path = index_path
         self.meta_path = meta_path

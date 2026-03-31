@@ -61,7 +61,11 @@ def main(argv: list[str] | None = None) -> int:
     ax.set_xlabel("Macro-F1")
     ax.set_ylabel("Input configuration")
     ax.set_title("Signal ablation — router macro-F1")
-    ax.set_xlim(0.65, 0.8)
+    lo = float(df["macro_f1"].min())
+    hi = float(df["macro_f1"].max())
+    span = hi - lo
+    pad = max(0.02 * span, 0.01) if span > 1e-9 else 0.04
+    ax.set_xlim(max(0.0, lo - pad), min(1.0, hi + pad))
     fig.tight_layout()
     savefig_pdf(fig, Path(args.output))
     logger.info("Wrote %s", args.output)
