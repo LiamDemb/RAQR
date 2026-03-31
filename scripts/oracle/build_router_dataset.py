@@ -19,6 +19,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from raqr.training import strategy_disagreement
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,6 +90,7 @@ def _to_json_safe(obj):
         return _to_json_safe(obj.tolist())
     return obj
 
+
 DEFAULT_OUTPUT_DIR = "data/training"
 DEFAULT_EMBED_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_PROBE_MODEL = "all-MiniLM-L6-v2"
@@ -131,10 +134,25 @@ def main() -> int:
         default=DEFAULT_DELTA,
         help=f"Oracle margin for Graph to win (default: {DEFAULT_DELTA}).",
     )
-    parser.add_argument(
+    train_mode = parser.add_mutually_exclusive_group()
+    train_mode.add_argument(
         "--undersample",
         action="store_true",
         help="Undersample train only to 50/50 Dense vs Graph (dev/test unchanged).",
+    )
+    train_mode.add_argument(
+        "--train-disagreement",
+        action="store_true",
+        help="Keep train rows only where Dense vs Graph disagree on correctness (F1 vs threshold); dev/test unchanged.",
+    )
+    parser.add_argument(
+        "--disagreement-threshold",
+        type=float,
+        default=float(os.getenv(DEFAULT_DISAGREEMENT_THRESHOLD, 0.7)),
+        help=(
+            'F1 threshold for "correct" per strategy when using --train-disagreement '
+            f"(default: {DEFAULT_DISAGREEMENT_THRESHOLD})."
+        ),
     )
     args = parser.parse_args()
 
@@ -194,8 +212,7 @@ def main() -> int:
 
     # Filter to novel items only
     novel_items = [
-        item for item in all_items
-        if item.get("question_id", "") not in completed_qids
+        item for item in all_items if item.get("question_id", "") not in completed_qids
     ]
     skipped = len(all_items) - len(novel_items)
     if skipped:
@@ -252,9 +269,7 @@ def main() -> int:
     # Existing rows are used ONLY as a feature cache; their old split
     # assignments are discarded. We re-split the entire pool by gold_label.
     all_existing_rows: list[dict] = [
-        row
-        for rows in existing_rows_by_split.values()
-        for row in rows
+        row for rows in existing_rows_by_split.values() for row in rows
     ]
     all_rows = all_existing_rows + all_new_rows
 
@@ -265,9 +280,9 @@ def main() -> int:
 
     # ── Full 3-way stratified split of ALL rows by gold_label ──
     train_ratio = float(os.getenv("TRAIN_RATIO", "0.8"))
-    dev_ratio   = float(os.getenv("DEV_RATIO",   "0.1"))
-    test_ratio  = float(os.getenv("TEST_RATIO",  "0.1"))
-    seed        = int(os.getenv("SEED", "42"))
+    dev_ratio = float(os.getenv("DEV_RATIO", "0.1"))
+    test_ratio = float(os.getenv("TEST_RATIO", "0.1"))
+    seed = int(os.getenv("SEED", "42"))
 
     try:
         from collections import Counter
@@ -290,7 +305,9 @@ def main() -> int:
         # Then carve dev from the remaining train+dev pool
         traindev_labels = [r.get("gold_label", "Dense") for r in traindev_rows]
         td_counts = Counter(traindev_labels)
-        can_stratify_td = all(c >= 2 for c in td_counts.values()) and len(traindev_rows) > 2
+        can_stratify_td = (
+            all(c >= 2 for c in td_counts.values()) and len(traindev_rows) > 2
+        )
         dev_frac_of_td = dev_ratio / (train_ratio + dev_ratio)
 
         train_rows, dev_rows = sk_split(
@@ -301,26 +318,67 @@ def main() -> int:
         )
 
         rng = random.Random(seed)
-        if args.undersample:
+        if args.train_disagreement:
+            t = float(args.disagreement_threshold)
+            n_before = len(train_rows)
+            train_rows = [
+                r
+                for r in train_rows
+                if strategy_disagreement(
+                    float(r.get("f1_dense", 0.0)),
+                    float(r.get("f1_graph", 0.0)),
+                    t,
+                )
+            ]
+            n_after = len(train_rows)
+            logger.info(
+                "Train disagreement filter (F1 >= %.4f = correct): %d → %d rows (%d dropped).",
+                t,
+                n_before,
+                n_after,
+                n_before - n_after,
+            )
+            if not train_rows:
+                logger.error(
+                    "No training rows left after disagreement filter; "
+                    "lower --disagreement-threshold or use a larger pool.",
+                )
+                return 1
+        elif args.undersample:
             train_rows = _undersample_split_to_50_50(train_rows, "train", rng)
 
-        for r in train_rows: r["split"] = "train"
-        for r in dev_rows:   r["split"] = "dev"
-        for r in test_rows:  r["split"] = "test"
+        for r in train_rows:
+            r["split"] = "train"
+        for r in dev_rows:
+            r["split"] = "dev"
+        for r in test_rows:
+            r["split"] = "test"
 
         final_splits: dict[str, list[dict]] = {
             "train": list(train_rows),
-            "dev":   list(dev_rows),
-            "test":  list(test_rows),
+            "dev": list(dev_rows),
+            "test": list(test_rows),
         }
 
         logger.info(
             "Final stratified split%s: %d train / %d dev / %d test (total %d).",
-            " (by gold_label)" if can_stratify else " (random – too few samples per class)",
-            len(train_rows), len(dev_rows), len(test_rows), len(all_rows),
+            (
+                " (by gold_label)"
+                if can_stratify
+                else " (random – too few samples per class)"
+            ),
+            len(train_rows),
+            len(dev_rows),
+            len(test_rows),
+            len(all_rows),
         )
 
     except ImportError:
+        if args.train_disagreement:
+            logger.error(
+                "--train-disagreement requires scikit-learn for stratified train/dev/test splits.",
+            )
+            return 1
         logger.warning("sklearn not found; assigning all rows to 'train'.")
         for r in all_rows:
             r["split"] = "train"

@@ -61,6 +61,10 @@ Scores the strategy answers (EM/F1), determines the "winning" strategy ("oracle 
 
 - **Incremental:** It reads your existing `labeled_*.jsonl` files. For questions that already have their embeddings and probe signals computed, it skips the heavy local compute and only calculates features for newly-added questions.
 
+- **`make build-router-dataset-undersample`:** Same as above but undersamples the **train** split to 50/50 Dense vs Graph (dev/test keep natural class proportions).
+
+- **`make build-router-dataset-disagreement`:** Keeps only **train** rows where Dense and Graph disagree on "correctness" (F1 ≥ threshold vs not; default threshold 0.5). Dev and test are unchanged. Override with `DISAGREEMENT_THRESHOLD=0.4` (etc.) on the `make` command line.
+
 ---
 
 ### Running it End-to-End

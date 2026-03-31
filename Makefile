@@ -1,4 +1,4 @@
-.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple eval-strategies mock-oracle debug-graph debug-ie submit-ie-batch collect-ie-batch build-graph-from-corpus run-strategy-batch submit-strategy-batch collect-strategy-batch build-router-dataset train-classifier validate-classifier train-all-classifiers validate-all-classifiers figures figure-oracle-dist figure-ablation-f1 figure-confusion figure-e2e figure-regret figure-permutation figures-e2e-preflight
+.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple eval-strategies mock-oracle debug-graph debug-ie submit-ie-batch collect-ie-batch build-graph-from-corpus run-strategy-batch submit-strategy-batch collect-strategy-batch build-router-dataset build-router-dataset-undersample build-router-dataset-disagreement train-classifier validate-classifier train-all-classifiers validate-all-classifiers figures figure-oracle-dist figure-ablation-f1 figure-confusion figure-e2e figure-regret figure-permutation figures-e2e-preflight
 
 -include .env
 
@@ -139,7 +139,18 @@ build-router-dataset-undersample:
 		--undersample \
 		$(if $(PROBE_TOP_K),--probe-top-k $(PROBE_TOP_K)) \
 		$(if $(DELTA),--delta $(DELTA))
-		
+
+# Train set only: rows where exactly one strategy is \"correct\" (F1 >= threshold). Dev/test unchanged.
+# Override threshold: make build-router-dataset-disagreement DISAGREEMENT_THRESHOLD=0.4
+DISAGREEMENT_THRESHOLD ?=
+build-router-dataset-disagreement:
+	poetry run python scripts/oracle/build_router_dataset.py \
+		--input "$(OUTPUT_DIR)/oracle_raw_scores.jsonl" \
+		--output-dir "data/training" \
+		--train-disagreement \
+		$(if $(DISAGREEMENT_THRESHOLD),--disagreement-threshold $(DISAGREEMENT_THRESHOLD)) \
+		$(if $(PROBE_TOP_K),--probe-top-k $(PROBE_TOP_K)) \
+		$(if $(DELTA),--delta $(DELTA))
 
 # Phase 4: Train classifier router. SIGNALS=q_emb,q_feat,probe (comma-separated)
 SIGNALS ?= q_emb,q_feat,probe
