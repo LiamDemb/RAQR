@@ -40,7 +40,12 @@ class DenseProbeRunner:
             probe_max_score, probe_min_score, probe_score_sd, probe_skewness,
             probe_semantic_dispersion
         """
-        q_emb = self._model.encode([query], normalize_embeddings=True).astype(np.float32)
+        q_emb = self._model.encode(
+            [query],
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        ).astype(np.float32)
         k = min(self.top_k, self._index.ntotal)
 
         if k <= 0:

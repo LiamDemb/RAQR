@@ -34,9 +34,8 @@ The Lightweight Classifier must process distinct **feature families**: **Q-Emb**
 ### Physical Architecture (Late Fusion Expectations)
 
 1.  **Q-Emb Branch (Text):**
-    - Input: Tokenized Query (max length 512).
-    - Backbone: `DistilBERT-base-uncased` (frozen or fine-tuned).
-    - Output: `[CLS]` token embedding (Dimension: 768).
+    - Input: Pre-computed `all-MiniLM-L6-v2` embedding.
+    - Output: Sentence embedding (Dimension: 384).
 2.  **Q-Feat + Probe Branch (Signals):**
     - Q-Feat: length/token count, entity density (from query entity extraction), complexity keywords; optional syntax depth.
     - Probe: max score, skewness, semantic dispersion (alias: semantic distance).
@@ -44,16 +43,17 @@ The Lightweight Classifier must process distinct **feature families**: **Q-Emb**
     - Layer: Batch Normalization (Crucial: scales inputs to 0-1 range).
     - Output: Signal Vector.
 3.  **Fusion Layer:**
-    - Operation: `torch.cat([CLS_Vector, Signal_Vector], dim=1)`
-    - Result: Combined Vector (dimension = 768 + signal dimension).
+    - Operation: `torch.cat([Q_Emb_Vector, Signal_Vector], dim=1)`
+    - Result: Combined Vector (dimension = 384 + signal dimension).
 4.  **Classification Head:**
-    - Layer 1: Linear (input_dim -> 256) + ReLU + Dropout(0.2).
-    - Layer 2: Linear (256 -> 3) (3 Classes).
+    - Layer 1: Linear (input_dim -> 128) + ReLU + Dropout(0.3).
+    - Layer 2: Linear (128 -> 128) + ReLU + Dropout(0.3).
+    - Layer 3: Linear (128 -> 2) (2 Classes: Dense, Graph).
     - Output: Softmax probability distribution.
 
 ## 3. Feature Families (Q-Emb / Q-Feat / Probe)
 
-**Q-Emb:** DistilBERT [CLS] embedding (768 dims).
+**Q-Emb:** `all-MiniLM-L6-v2` sentence embedding (384 dims).
 
 **Q-Feat:** Engineered query features—length/token count, entity density (from query entity extraction), complexity keywords; optional syntax depth.
 

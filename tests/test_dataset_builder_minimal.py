@@ -50,7 +50,6 @@ def oracle_raw_scores_fixture():
             "gold_answers": ["Paris"],
             "pred_dense": "Paris",
             "pred_graph": "Paris",
-            "split": "train",
             "dataset_source": "nq",
         },
         {
@@ -59,7 +58,6 @@ def oracle_raw_scores_fixture():
             "gold_answers": ["A", "B"],
             "pred_dense": "A",
             "pred_graph": "B",
-            "split": "dev",
             "dataset_source": "2wiki",
         },
     ]

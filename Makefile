@@ -1,4 +1,4 @@
-.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple eval-strategies mock-oracle debug-graph debug-ie submit-ie-batch collect-ie-batch build-graph-from-corpus run-strategy-batch submit-strategy-batch collect-strategy-batch build-router-dataset
+.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple eval-strategies mock-oracle debug-graph debug-ie submit-ie-batch collect-ie-batch build-graph-from-corpus run-strategy-batch submit-strategy-batch collect-strategy-batch build-router-dataset train-classifier validate-classifier train-all-classifiers validate-all-classifiers
 
 -include .env
 
@@ -107,7 +107,8 @@ submit-answer-batch:
 		--output-dir "$(OUTPUT_DIR)" \
 		$(if $(LIMIT),--limit $(LIMIT))
 
-# Answer batch: collect results into oracle_raw_scores.jsonl (after batches complete)
+# Answer batch: collect results into oracle_raw_scores.jsonl (merge; no new API submit).
+# Use after batches complete, or alone if submit already ran but collect was skipped.
 collect-answer-batch:
 	poetry run python scripts/oracle/collect_answer_batch.py \
 		--state "$(or $(STATE),$(OUTPUT_DIR)/batch_state_strategy.json)" \
@@ -120,3 +121,59 @@ build-router-dataset:
 		--output-dir "data/training" \
 		$(if $(PROBE_TOP_K),--probe-top-k $(PROBE_TOP_K)) \
 		$(if $(DELTA),--delta $(DELTA))
+
+# Same as build-router-dataset but balances train/dev/test each to 50/50 Dense vs Graph.
+build-router-dataset-undersample:
+	poetry run python scripts/oracle/build_router_dataset.py \
+		--input "$(OUTPUT_DIR)/oracle_raw_scores.jsonl" \
+		--output-dir "data/training" \
+		--undersample \
+		$(if $(PROBE_TOP_K),--probe-top-k $(PROBE_TOP_K)) \
+		$(if $(DELTA),--delta $(DELTA))
+		
+
+# Phase 4: Train classifier router. SIGNALS=q_emb,q_feat,probe (comma-separated)
+SIGNALS ?= q_emb,q_feat,probe
+EPOCHS ?= 100
+RESULTS_DIR ?= results
+
+train-classifier:
+	poetry run python scripts/04a_train_classifier.py \
+		--signals "$(SIGNALS)" \
+		--epochs $(EPOCHS) \
+		$(if $(LR),--lr $(LR)) \
+		$(if $(BATCH_SIZE),--batch-size $(BATCH_SIZE))
+
+# Phase 4: Validate classifier against gate metrics
+validate-classifier:
+	poetry run python scripts/04b_validate_classifier.py \
+		--signals "$(SIGNALS)" \
+		--results-dir "$(RESULTS_DIR)"
+
+# Phase 4: Train ALL ablation classifiers sequentially
+ABLATIONS = q_emb q_feat probe q_emb,q_feat q_emb,probe q_feat,probe q_emb,q_feat,probe
+
+train-all-classifiers:
+	@echo "═══════════════════════════════════════════════════"
+	@echo "  Training all 7 ablation classifiers"
+	@echo "═══════════════════════════════════════════════════"
+	@for sig in $(ABLATIONS); do \
+		echo ""; \
+		echo "─── Training: $$sig ───"; \
+		poetry run python scripts/04a_train_classifier.py \
+			--signals "$$sig" \
+			--epochs $(EPOCHS) \
+			--hidden-dim 64 \
+			--weight-decay 0.05 \
+			--lr 3e-4 \
+			$(if $(BATCH_SIZE),--batch-size $(BATCH_SIZE)); \
+	done
+	@echo ""
+	@echo "═══════════════════════════════════════════════════"
+	@echo "  All classifiers trained.  Run: make validate-all-classifiers"
+	@echo "═══════════════════════════════════════════════════"
+
+# Phase 4: Validate ALL ablation classifiers and produce summary report
+validate-all-classifiers:
+	poetry run python scripts/04b_validate_classifier.py --all \
+		--results-dir "$(RESULTS_DIR)"

@@ -16,7 +16,6 @@ class BenchmarkItem:
     question: str
     gold_answers: List[str]
     dataset_source: str
-    split: str
     dataset_version: Optional[str] = None
 
     def to_json(self) -> Dict[str, Any]:
@@ -25,7 +24,6 @@ class BenchmarkItem:
             "question": self.question,
             "gold_answers": list(self.gold_answers),
             "dataset_source": self.dataset_source,
-            "split": self.split,
         }
         if self.dataset_version:
             payload["dataset_version"] = self.dataset_version

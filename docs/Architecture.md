@@ -160,8 +160,7 @@ Responsible for ingesting datasets and normalizing them into a standard schema.
         "question_id": "uuid",
         "question": "Who was...",
         "gold_answers": ["Expected string 1", "Expected string 2"],
-        "dataset_source": "nq|2wiki",
-        "split": "train|dev|test"
+        "dataset_source": "nq|2wiki"
     }
     ```
 
@@ -210,11 +209,11 @@ Runs _before_ the router. It executes a low-latency search (Dense RAG top-k=10).
 
 #### 2. Classifier Router (`classifier.py`)
 
-- **Architecture:** DistilBERT model with a modified Classification Head.
+- **Architecture:** MLP Classification Head with dynamic input dimension.
 - **Inputs:**
-    - Tokens (Text) $\rightarrow$ Transformer Layers $\rightarrow$ `[CLS]` embedding.
-    - Signals (Floats) $\rightarrow$ Normalized $\rightarrow$ Concatenated with `[CLS]`.
-    - Output $\rightarrow$ Linear Layer $\rightarrow$ Softmax (3 classes).
+    - Q-Emb: Pre-computed `all-MiniLM-L6-v2` embedding (384 dims).
+    - Signals (Floats) → Z-score Normalized → Concatenated with Q-Emb.
+    - Output → Linear Layer → Softmax (2 classes: Dense, Graph).
 
 #### 3. LLM Router (`llm.py`)
 
@@ -228,7 +227,7 @@ The codebase is organized to run in **4 sequential stages**:
 ### Stage 1: Ingestion (Data Prep)
 
 - **Scripts:** `python scripts/01_ingest_data.py` and `python scripts/01_build_corpus.py`
-- **Action:** Build the benchmark (splits) first, then build the unified chunked corpus (plus enrichment) and retrieval artifacts (FAISS + metadata table + NetworkX graph), per `docs/Corpus Creation Strategy.md`.
+- **Action:** Build the benchmark, then build the unified chunked corpus (plus enrichment) and retrieval artifacts (FAISS + metadata table + NetworkX graph), per `docs/Corpus Creation Strategy.md`. Train/dev/test splits for the router are applied later when building `labeled_*.jsonl`.
 - **Artifacts:** `data/processed/corpus.jsonl`, `data/processed/vector_index.faiss`, `data/processed/vector_meta.parquet`, `data/processed/graph.pkl` (and optional docstore).
 
 ### Stage 2: Oracle Label Generation (The "Ground Truth")

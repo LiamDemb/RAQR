@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import pandas as pd
+from tqdm.auto import tqdm
 
 from dotenv import load_dotenv
 from raqr.data.build_entity_index import build_entity_index
@@ -228,16 +229,40 @@ def main() -> int:
     )
     docstore = DocStore(args.docstore)
     wiki = WikipediaClient()
+    if wiki.oauth2_authenticated:
+        logger.info(
+            "Wikipedia Action API requests use OAuth2 (authenticated rate limits)"
+        )
+    elif "2wiki" in paths_by_source:
+        logger.warning(
+            "WIKIMEDIA_OAUTH2_ACCESS_TOKEN is not set; unauthenticated Wikipedia API "
+            "limits are low and large 2Wiki corpus builds may hit 429 errors"
+        )
     wikidata = WikidataClient()
 
+    logger.info(
+        "Ingesting %d benchmark questions (docstore + Wikipedia fetch)...",
+        len(samples),
+    )
     all_docs = {}
-    for sample in samples:
+    for sample in tqdm(
+        samples,
+        desc="Ingest questions",
+        unit="question",
+        dynamic_ncols=True,
+    ):
         if sample["source"] == "2wiki":
             docs = ingest_2wiki(sample, budgets, docstore, wiki)
         else:
             docs = ingest_nq(sample, budgets, docstore, wiki)
         for doc in docs:
             all_docs[doc.doc_key] = doc
+
+    logger.info(
+        "Ingest finished: %d questions → %d unique docs",
+        len(samples),
+        len(all_docs),
+    )
 
     alias_map_redirects = build_alias_map_from_redirects(
         titles=[doc.title for doc in all_docs.values() if doc.title],
@@ -310,9 +335,8 @@ def main() -> int:
             prior = chunk_cache.get(chunk_id)
             if prior is not None:
                 prior_meta = prior.get("metadata", {})
-                has_extraction = (
-                    bool(prior_meta.get("entities"))
-                    or bool(prior_meta.get("relations"))
+                has_extraction = bool(prior_meta.get("entities")) or bool(
+                    prior_meta.get("relations")
                 )
             else:
                 has_extraction = False

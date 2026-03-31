@@ -24,13 +24,13 @@ from openai import OpenAI
 from raqr.data.canonical_clean import normalize_text_for_extraction
 from raqr.data.llm_onepass import build_onepass_batch_line, build_onepass_chat_request
 from raqr.data.wiki_title_matcher import build_wiki_title_matcher, load_wiki_titles
+from raqr.openai_batch_limits import batch_limit_requests
 from raqr.prompts import get_onepass_extraction_prompt
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-BATCH_LIMIT_REQUESTS = 50_000
 BATCH_LIMIT_BYTES = 200 * 1024 * 1024  # 200 MB
 SHARD_PREFIX = "batch_input_ie"
 STATE_FILENAME = "batch_state_ie.json"
@@ -120,6 +120,7 @@ def main() -> int:
             json.dump(state, f, indent=2)
         return 0
 
+    limit_requests = batch_limit_requests()
     shards: list[dict] = []
     shard_idx = 0
     shard_count = 0
@@ -156,7 +157,7 @@ def main() -> int:
     batch_out = shard_file.open("w", encoding="utf-8")
     try:
         for chunk in chunks:
-            chunk_id = chunk.get("chunk_id") or f"chunk_{len(shards) * BATCH_LIMIT_REQUESTS + shard_count}"
+            chunk_id = chunk.get("chunk_id") or f"chunk_{len(shards) * limit_requests + shard_count}"
             text_raw = chunk.get("text") or ""
             text_for_extraction = normalize_text_for_extraction(text_raw)
             title = chunk.get("title") or "N/A"
@@ -176,7 +177,7 @@ def main() -> int:
             line_bytes = len(line_json.encode("utf-8"))
 
             if shard_count > 0 and (
-                shard_count >= BATCH_LIMIT_REQUESTS or shard_bytes + line_bytes > BATCH_LIMIT_BYTES
+                shard_count >= limit_requests or shard_bytes + line_bytes > BATCH_LIMIT_BYTES
             ):
                 next_file = _flush_shard(batch_out)
                 batch_out = next_file.open("w", encoding="utf-8")

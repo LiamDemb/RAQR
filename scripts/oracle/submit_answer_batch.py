@@ -31,12 +31,7 @@ def main() -> int:
         "--limit",
         type=int,
         default=None,
-        help="Max questions (Train+Dev only).",
-    )
-    parser.add_argument(
-        "--include-test",
-        action="store_true",
-        help="Include Test split (default: exclude per Phase 03).",
+        help="Max benchmark questions to include (optional).",
     )
     parser.add_argument(
         "--completion-window",
@@ -56,7 +51,6 @@ def main() -> int:
         benchmark_path=benchmark_path,
         output_dir=Path(args.output_dir),
         limit=args.limit,
-        include_test=args.include_test,
         completion_window=args.completion_window,
     )
 

@@ -1,15 +1,6 @@
-"""Batch generation for strategy answers via OpenAI Batch API."""
+"""Generation helpers (batch API, orchestration, answer parsing).
 
-from raqr.generation.batch import (
-    BatchRecorderGenerator,
-    build_batch_line,
-    build_generation_request,
-    parse_generation_output,
-)
-
-__all__ = [
-    "BatchRecorderGenerator",
-    "build_batch_line",
-    "build_generation_request",
-    "parse_generation_output",
-]
+Import from submodules (e.g. ``raqr.generation.batch``) rather than this package
+root so that ``raqr.generator`` can use leaf modules like ``answer_prefix``
+without eager-loading batch (which depends on ``generator``).
+"""
