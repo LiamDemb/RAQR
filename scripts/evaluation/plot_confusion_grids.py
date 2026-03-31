@@ -45,14 +45,14 @@ def _plot_cm_grid(
 ) -> plt.Figure:
     """Plot confusion grids: one colorbar per panel, same numeric scale on all panels.
 
-    Assumes the test split is **50/50 Dense vs Graph** (undersampled router data).
-    Then each matrix row sums to ``n_test/2``, so ``vmax = n_test/2`` caps any cell.
+    Uses ``vmax = n_test`` so the scale is valid for imbalanced dev/test splits (train-only
+    undersampling leaves test with natural class proportions).
     """
     n = len(identifiers)
     nrows = int(np.ceil(n / ncols))
 
     n_test = _count_nonempty_jsonl_lines(split_path)
-    vmax_axis = (float(n_test) / 2.0) if n_test else 1.0
+    vmax_axis = float(n_test) if n_test else 1.0
 
     apply_default_style()
     fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
@@ -92,7 +92,7 @@ def _plot_cm_grid(
                     str(int(cm[i, j])),
                     ha="center",
                     va="center",
-                    color="white" if cm[i, j] > vmax_axis / 2 else "black",
+                    color="white" if cm[i, j] > vmax_axis / 2.0 else "black",
                 )
 
     for j in range(len(identifiers), nrows * ncols):
@@ -100,8 +100,7 @@ def _plot_cm_grid(
         axes[r][c].set_visible(False)
 
     fig.suptitle(
-        f"Router confusion matrices (shared scale 0–{vmax_axis:g}; "
-        f"50/50 test split, n={n_test}, vmax=n/2)"
+        f"Router confusion matrices (shared scale 0–{vmax_axis:g}; n_test={n_test})"
     )
     fig.tight_layout()
     return fig

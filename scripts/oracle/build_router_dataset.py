@@ -134,7 +134,7 @@ def main() -> int:
     parser.add_argument(
         "--undersample",
         action="store_true",
-        help="Undersample train, dev, and test each to 50/50 Dense vs Graph.",
+        help="Undersample train only to 50/50 Dense vs Graph (dev/test unchanged).",
     )
     args = parser.parse_args()
 
@@ -303,8 +303,6 @@ def main() -> int:
         rng = random.Random(seed)
         if args.undersample:
             train_rows = _undersample_split_to_50_50(train_rows, "train", rng)
-            dev_rows = _undersample_split_to_50_50(dev_rows, "dev", rng)
-            test_rows = _undersample_split_to_50_50(test_rows, "test", rng)
 
         for r in train_rows: r["split"] = "train"
         for r in dev_rows:   r["split"] = "dev"

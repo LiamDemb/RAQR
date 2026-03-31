@@ -131,7 +131,7 @@ build-router-dataset:
 		$(if $(PROBE_TOP_K),--probe-top-k $(PROBE_TOP_K)) \
 		$(if $(DELTA),--delta $(DELTA))
 
-# Same as build-router-dataset but balances train/dev/test each to 50/50 Dense vs Graph.
+# Same as build-router-dataset but balances train only to 50/50 Dense vs Graph (dev/test natural split).
 build-router-dataset-undersample:
 	poetry run python scripts/oracle/build_router_dataset.py \
 		--input "$(OUTPUT_DIR)/oracle_raw_scores.jsonl" \
