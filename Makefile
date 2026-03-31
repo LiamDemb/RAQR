@@ -1,4 +1,4 @@
-.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple eval-strategies mock-oracle debug-graph debug-ie submit-ie-batch collect-ie-batch build-graph-from-corpus run-strategy-batch submit-strategy-batch collect-strategy-batch build-router-dataset train-classifier validate-classifier train-all-classifiers validate-all-classifiers
+.PHONY: install setup-models lock test ingest build-corpus build-corpus-simple eval-strategies mock-oracle debug-graph debug-ie submit-ie-batch collect-ie-batch build-graph-from-corpus run-strategy-batch submit-strategy-batch collect-strategy-batch build-router-dataset train-classifier validate-classifier train-all-classifiers validate-all-classifiers figures figure-oracle-dist figure-ablation-f1 figure-confusion figure-e2e figure-regret figure-permutation figures-e2e-preflight
 
 -include .env
 
@@ -98,6 +98,15 @@ run-strategy-batch:
 		--benchmark "$(BENCHMARK_PATH)" \
 		--output-dir "$(OUTPUT_DIR)" \
 		$(if $(LIMIT),--limit $(LIMIT)) \
+		$(if $(NO_WAIT),--no-wait) \
+		$(if $(ONLY_QUESTION_IDS_FROM),--only-question-ids-from $(ONLY_QUESTION_IDS_FROM))
+
+# After build-router-dataset: backfill Dense+Graph batch answers for test IDs only (requires API).
+figures-e2e-preflight:
+	poetry run python scripts/oracle/run_strategy_batch.py \
+		--benchmark "$(BENCHMARK_PATH)" \
+		--output-dir "$(OUTPUT_DIR)" \
+		--only-question-ids-from "$(ROUTER_TEST_PATH)" \
 		$(if $(NO_WAIT),--no-wait)
 
 # Answer batch: submit only (standalone; run-strategy-batch does submit+wait+collect internally)
@@ -136,6 +145,14 @@ build-router-dataset-undersample:
 SIGNALS ?= q_emb,q_feat,probe
 EPOCHS ?= 100
 RESULTS_DIR ?= results
+
+# Dissertation figures (see scripts/evaluation/). Oracle distribution needs two router builds:
+# ROUTER_DIR_BEFORE = e.g. unbalanced labeled_* trees; ROUTER_DIR_AFTER = undersampled (default data/training).
+FIGURES_DIR ?= figures
+MODEL_DIR ?= models
+ROUTER_TEST_PATH ?= data/training/labeled_test.jsonl
+ROUTER_DIR_BEFORE ?= data/training_unbalanced
+ROUTER_DIR_AFTER ?= data/training
 
 train-classifier:
 	poetry run python scripts/04a_train_classifier.py \
@@ -177,3 +194,44 @@ train-all-classifiers:
 validate-all-classifiers:
 	poetry run python scripts/04b_validate_classifier.py --all \
 		--results-dir "$(RESULTS_DIR)"
+
+# --- Evaluation figures (PDFs under FIGURES_DIR; single aggregate + per-figure targets) ---
+figures: figure-oracle-dist figure-ablation-f1 figure-confusion figure-e2e figure-regret figure-permutation
+
+figure-oracle-dist:
+	poetry run python scripts/evaluation/plot_oracle_label_distribution.py \
+		--before-dir "$(ROUTER_DIR_BEFORE)" \
+		--after-dir "$(ROUTER_DIR_AFTER)" \
+		--output "$(FIGURES_DIR)/oracle_label_distribution.pdf"
+
+figure-ablation-f1:
+	poetry run python scripts/evaluation/plot_ablation_macro_f1.py \
+		--split-path "$(ROUTER_TEST_PATH)" \
+		--model-dir "$(MODEL_DIR)" \
+		--output "$(FIGURES_DIR)/ablation_macro_f1.pdf"
+
+figure-confusion:
+	poetry run python scripts/evaluation/plot_confusion_grids.py \
+		--split-path "$(ROUTER_TEST_PATH)" \
+		--model-dir "$(MODEL_DIR)" \
+		--output-four "$(FIGURES_DIR)/confusion_matrix_grid_4.pdf" \
+		--output-seven "$(FIGURES_DIR)/confusion_matrix_grid_7.pdf"
+
+figure-e2e:
+	poetry run python scripts/evaluation/plot_e2e_system_f1.py \
+		--labeled-test "$(ROUTER_TEST_PATH)" \
+		--model-dir "$(MODEL_DIR)" \
+		--output "$(FIGURES_DIR)/e2e_system_f1.pdf" \
+		--output-json "$(RESULTS_DIR)/e2e_test_f1.json"
+
+figure-regret:
+	poetry run python scripts/evaluation/plot_routing_regret_matrix.py \
+		--labeled-test "$(ROUTER_TEST_PATH)" \
+		--model-dir "$(MODEL_DIR)" \
+		--output "$(FIGURES_DIR)/routing_regret_severity.pdf"
+
+figure-permutation:
+	poetry run python scripts/evaluation/plot_permutation_importance.py \
+		--split-path "$(ROUTER_TEST_PATH)" \
+		--model-dir "$(MODEL_DIR)" \
+		--output "$(FIGURES_DIR)/router_permutation_importance.pdf"

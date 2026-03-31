@@ -12,6 +12,7 @@ from openai import OpenAI
 from raqr.generation.batch_orchestrator import (
     STATE_FILENAME,
     OUTPUT_FILENAME,
+    load_question_ids_from_labeled_jsonl,
     submit_batches,
     collect_batches,
 )
@@ -73,7 +74,17 @@ def main() -> int:
         "--limit",
         type=int,
         default=None,
-        help="Max questions (Train+Dev only) for quick runs.",
+        help="Max leading benchmark rows to load (ignored if --only-question-ids-from is set).",
+    )
+    parser.add_argument(
+        "--only-question-ids-from",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Labeled router JSONL (e.g. data/training/labeled_test.jsonl). "
+            "Loads the full benchmark and submits Dense+Graph only for those question_ids "
+            "(backfill / targeted eval)."
+        ),
     )
     parser.add_argument(
         "--no-wait",
@@ -99,6 +110,15 @@ def main() -> int:
         logger.error("Benchmark not found: %s", benchmark_path)
         return 1
 
+    only_ids = None
+    if args.only_question_ids_from:
+        p = Path(args.only_question_ids_from)
+        if not p.is_file():
+            logger.error("--only-question-ids-from not found: %s", p)
+            return 1
+        only_ids = load_question_ids_from_labeled_jsonl(p)
+        logger.info("Restricting batch to %d question IDs from %s.", len(only_ids), p)
+
     # Clean stale batch state from prior completed runs so submit can re-evaluate
     # (Do NOT delete oracle_raw_scores.jsonl — submit_batches reads it for caching)
     if state_path.is_file():
@@ -112,11 +132,12 @@ def main() -> int:
         output_dir=output_dir,
         limit=args.limit,
         completion_window="24h",
+        only_question_ids=only_ids,
     )
     if exit_code != 0:
         logger.error("Submit failed.")
         return exit_code
-        
+
     if not state_path.is_file():
         logger.error("State file not created after submit.")
         return 1
@@ -125,7 +146,9 @@ def main() -> int:
         state = json.load(f)
     shards = state.get("shards") or []
     if not shards:
-        logger.info("No shards to process (all questions already answered). Output is up to date.")
+        logger.info(
+            "No shards to process (all questions already answered). Output is up to date."
+        )
         return 0
 
     # 2. Wait for Batch
@@ -154,7 +177,10 @@ def main() -> int:
             "make collect-answer-batch"
         )
     else:
-        logger.info("Collecting batch results into %s (merges with existing file if any)...", output_path)
+        logger.info(
+            "Collecting batch results into %s (merges with existing file if any)...",
+            output_path,
+        )
         exit_code = collect_batches(state_path=state_path, output_dir=output_dir)
         if exit_code != 0:
             logger.error("Collect failed.")

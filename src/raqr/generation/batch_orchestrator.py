@@ -40,21 +40,82 @@ def _load_benchmark(path: Path, limit: int | None) -> list[dict]:
     return samples
 
 
+def load_question_ids_from_labeled_jsonl(path: Path) -> set[str]:
+    """Load unique question_id values from a labeled router JSONL (e.g. labeled_test.jsonl)."""
+    ids: set[str] = set()
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            qid = row.get("question_id", "")
+            if qid:
+                ids.add(str(qid))
+    return ids
+
+
+def _oracle_row_has_merged_strategies(row: dict) -> bool:
+    """True when this oracle row reflects a completed Dense+Graph batch collect.
+
+    ``pred_dense`` / ``pred_graph`` may be empty strings (e.g. Graph returned NO_CONTEXT
+    or no answer). Those rows are still valid: we must not re-submit the batch.
+    """
+    qid = str(row.get("question_id", "")).strip()
+    if not qid:
+        return False
+    if "pred_dense" not in row or "pred_graph" not in row:
+        return False
+    pd = row.get("pred_dense")
+    pg = row.get("pred_graph")
+    # JSON null → treat as empty answer (still a completed merge).
+    if pd is None:
+        pd = ""
+    if pg is None:
+        pg = ""
+    return isinstance(pd, str) and isinstance(pg, str)
+
+
 def submit_batches(
     benchmark_path: Path,
     output_dir: Path,
     limit: Optional[int] = None,
     completion_window: str = "24h",
+    only_question_ids: Optional[set[str]] = None,
 ) -> int:
-    """Submit OpenAI Batch for strategy generation and write state file. Returns exit code."""
+    """Submit OpenAI Batch for strategy generation and write state file. Returns exit code.
+
+    Args:
+        benchmark_path: Unified benchmark JSONL.
+        output_dir: Writes batch shards, state, and reads/writes oracle_raw_scores.jsonl.
+        limit: Max **leading** benchmark rows to load (ignored if only_question_ids is set).
+        only_question_ids: If set, loads the **full** benchmark and keeps only rows whose
+            question_id is in this set (for targeted test-set backfill).
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    samples = _load_benchmark(
-        benchmark_path,
-        limit=limit,
-    )
+    effective_limit = None if only_question_ids else limit
+    samples = _load_benchmark(benchmark_path, limit=effective_limit)
+    if only_question_ids:
+        before = len(samples)
+        samples = [
+            s
+            for s in samples
+            if str(s.get("question_id", "")).strip() in only_question_ids
+        ]
+        logger.info(
+            "Filtered benchmark %d → %d rows matching %d question IDs.",
+            before,
+            len(samples),
+            len(only_question_ids),
+        )
     if not samples:
-        logger.error("No samples to process (check --limit and benchmark file).")
+        logger.error(
+            "No samples to process (check --limit, --only-question-ids-from, and benchmark file)."
+        )
         return 1
 
     logger.info("Loaded %d benchmark samples.", len(samples))
@@ -73,10 +134,8 @@ def submit_batches(
                 except json.JSONDecodeError:
                     continue
                 qid = row.get("question_id", "")
-                has_dense = bool(row.get("pred_dense"))
-                has_graph = bool(row.get("pred_graph"))
-                if qid and has_dense:  # removed and had_graph
-                    completed_qids.add(qid)
+                if _oracle_row_has_merged_strategies(row):
+                    completed_qids.add(str(qid).strip())
         if completed_qids:
             logger.info(
                 "Found %d already-completed questions in %s.",

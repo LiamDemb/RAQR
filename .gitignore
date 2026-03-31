@@ -52,6 +52,7 @@ target/
 /data/
 models/
 results/
+figures/
 
 # Development
 /docs/dev/
