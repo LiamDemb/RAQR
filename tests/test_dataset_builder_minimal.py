@@ -24,6 +24,13 @@ def _stub_probe():
                 "probe_score_sd": 0.1,
                 "probe_skewness": 0.0,
                 "probe_semantic_dispersion": 0.2,
+                "probe_entropy": 1.0,
+                "probe_gini": 0.05,
+                "probe_mass_k_80": 2.0,
+                "probe_mass_k_90": 2.0,
+                "probe_mass_k_95": 3.0,
+                "probe_top1_top2_gap": 0.1,
+                "probe_top1_top2_ratio": 1.05,
             }
     return Stub()
 
@@ -81,6 +88,8 @@ def test_output_schema(oracle_raw_scores_fixture):
         "pred_dense", "pred_graph",
         "probe_scores", "probe_max_score", "probe_min_score",
         "probe_score_sd", "probe_skewness", "probe_semantic_dispersion",
+        "probe_entropy", "probe_gini", "probe_mass_k_80", "probe_mass_k_90",
+        "probe_mass_k_95", "probe_top1_top2_gap", "probe_top1_top2_ratio",
         "entity_count", "syntactic_depth", "query_length_tokens",
         "relational_keyword_flag",
     }

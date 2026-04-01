@@ -59,7 +59,9 @@ def build_router_dataset_rows(
     Yields dicts with: question_id, question, split, dataset_source, question_embedding,
     gold_answers, gold_label, f1_dense, f1_graph, em_dense, em_graph, pred_dense, pred_graph,
     probe_scores, probe_max_score, probe_min_score, probe_score_sd, probe_skewness,
-    probe_semantic_dispersion, entity_count, syntactic_depth, query_length_tokens,
+    probe_semantic_dispersion, probe_entropy, probe_gini, probe_mass_k_80,
+    probe_mass_k_90, probe_mass_k_95, probe_top1_top2_gap, probe_top1_top2_ratio,
+    entity_count, syntactic_depth, query_length_tokens,
     relational_keyword_flag.
     """
     for item in items:
@@ -123,6 +125,13 @@ def build_router_dataset_rows(
             "probe_score_sd": probe_res.get("probe_score_sd", 0.0),
             "probe_skewness": probe_res.get("probe_skewness", 0.0),
             "probe_semantic_dispersion": probe_res.get("probe_semantic_dispersion", float("nan")),
+            "probe_entropy": probe_res.get("probe_entropy", float("nan")),
+            "probe_gini": probe_res.get("probe_gini", float("nan")),
+            "probe_mass_k_80": probe_res.get("probe_mass_k_80", float("nan")),
+            "probe_mass_k_90": probe_res.get("probe_mass_k_90", float("nan")),
+            "probe_mass_k_95": probe_res.get("probe_mass_k_95", float("nan")),
+            "probe_top1_top2_gap": probe_res.get("probe_top1_top2_gap", float("nan")),
+            "probe_top1_top2_ratio": probe_res.get("probe_top1_top2_ratio", float("nan")),
             "entity_count": entity_count,
             "syntactic_depth": syntactic_depth,
             "query_length_tokens": query_length_tokens,

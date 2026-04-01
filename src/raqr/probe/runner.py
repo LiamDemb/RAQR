@@ -10,6 +10,7 @@ import os
 
 from .dense_probe import (
     DEFAULT_MODEL_NAME,
+    _compute_distribution_metrics,
     _compute_semantic_dispersion,
     _compute_standard_deviation,
 )
@@ -38,8 +39,19 @@ class DenseProbeRunner:
         Returns:
             probe_scores: list of top-k similarity scores
             probe_max_score, probe_min_score, probe_score_sd, probe_skewness,
-            probe_semantic_dispersion
+            probe_semantic_dispersion,
+            probe_entropy (nats, softmax), probe_gini, probe_mass_k_{80,90,95},
+            probe_top1_top2_gap, probe_top1_top2_ratio
         """
+        nan7 = {
+            "probe_entropy": float("nan"),
+            "probe_gini": float("nan"),
+            "probe_mass_k_80": float("nan"),
+            "probe_mass_k_90": float("nan"),
+            "probe_mass_k_95": float("nan"),
+            "probe_top1_top2_gap": float("nan"),
+            "probe_top1_top2_ratio": float("nan"),
+        }
         q_emb = self._model.encode(
             [query],
             convert_to_numpy=True,
@@ -56,6 +68,7 @@ class DenseProbeRunner:
                 "probe_score_sd": 0.0,
                 "probe_skewness": 0.0,
                 "probe_semantic_dispersion": float("nan"),
+                **nan7,
             }
 
         scores, ids = self._index.search(q_emb, k)
@@ -71,6 +84,7 @@ class DenseProbeRunner:
                 "probe_score_sd": 0.0,
                 "probe_skewness": 0.0,
                 "probe_semantic_dispersion": float("nan"),
+                **nan7,
             }
 
         scores = scores[valid]
@@ -83,6 +97,9 @@ class DenseProbeRunner:
         skew_s = float(skew(scores)) if len(scores) > 1 else 0.0
         disp = _compute_semantic_dispersion(q_emb[0], self._index, ids)
         score_sd = _compute_standard_deviation(scores_arr)
+        ent, gini, mk80, mk90, mk95, gap, tratio = _compute_distribution_metrics(
+            scores_arr
+        )
 
         return {
             "probe_scores": scores_list,
@@ -91,4 +108,11 @@ class DenseProbeRunner:
             "probe_score_sd": score_sd,
             "probe_skewness": skew_s,
             "probe_semantic_dispersion": disp,
+            "probe_entropy": ent,
+            "probe_gini": gini,
+            "probe_mass_k_80": mk80,
+            "probe_mass_k_90": mk90,
+            "probe_mass_k_95": mk95,
+            "probe_top1_top2_gap": gap,
+            "probe_top1_top2_ratio": tratio,
         }

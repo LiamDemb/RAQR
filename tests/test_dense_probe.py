@@ -5,11 +5,60 @@ import numpy as np
 import pytest
 
 from raqr.probe.dense_probe import (
+    _compute_distribution_metrics,
     _compute_semantic_dispersion,
     _compute_standard_deviation,
+    _gini_softmax_probabilities,
+    _shannon_entropy_natural,
+    _smallest_k_for_mass_thresholds,
+    _softmax,
+    _top1_top2_gap_ratio,
     run_probe,
 )
 from raqr.probe.signals import ProbeSignals
+
+
+def test_softmax_uniform_three():
+    s = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+    p = _softmax(s)
+    assert len(p) == 3
+    assert abs(float(np.sum(p)) - 1.0) < 1e-6
+    assert abs(float(p[0]) - 1.0 / 3.0) < 1e-5
+
+
+def test_entropy_two_equal_masses():
+    p = np.array([0.5, 0.5], dtype=np.float64)
+    h = _shannon_entropy_natural(p)
+    assert abs(h - math.log(2.0)) < 1e-9
+
+
+def test_gini_uniform():
+    p = np.array([0.25, 0.25, 0.25, 0.25], dtype=np.float64)
+    assert abs(_gini_softmax_probabilities(p)) < 1e-9
+
+
+def test_mass_k_thresholds():
+    # Descending mass [0.5, 0.4, 0.1] -> cum [0.5, 0.9, 1.0] (float-safe)
+    p = np.array([0.5, 0.4, 0.1], dtype=np.float64)
+    m = _smallest_k_for_mass_thresholds(p)
+    assert m[0.8] == 2.0
+    assert m[0.9] == 2.0
+    assert m[0.95] == 3.0
+
+
+def test_top1_top2_gap_ratio():
+    s = np.array([1.0, 0.5], dtype=np.float32)
+    gap, ratio = _top1_top2_gap_ratio(s)
+    assert gap == 0.5
+    assert abs(ratio - 1.0 / (0.5 + 1e-12)) < 1e-6
+
+    g2, r2 = _top1_top2_gap_ratio(np.array([1.0], dtype=np.float32))
+    assert math.isnan(g2) and math.isnan(r2)
+
+
+def test_distribution_metrics_empty():
+    t = _compute_distribution_metrics(np.array([], dtype=np.float32))
+    assert all(math.isnan(x) for x in t)
 
 
 def test_standard_deviation():
@@ -83,6 +132,12 @@ def test_run_probe(mock_st, mock_read_parquet, mock_read_index):
     assert abs(result.max_score - 0.9) < 1e-5
     assert abs(result.min_score - 0.7) < 1e-5
     assert abs(result.score_sd - math.sqrt(2/300)) < 1e-4 # std(0.9, 0.8, 0.7)
+    exp_ent, exp_gini, _, _, _, _, _ = _compute_distribution_metrics(
+        np.array([0.9, 0.8, 0.7], dtype=np.float32)
+    )
+    assert abs(result.entropy - exp_ent) < 1e-5
+    assert abs(result.gini_softmax - exp_gini) < 1e-5
+    assert math.isfinite(result.mass_k_80)
     
     # Assert ST model was called
     mock_model.encode.assert_called_once_with(["test query"], normalize_embeddings=True)
@@ -112,3 +167,5 @@ def test_run_probe_invalid_ids(mock_st, mock_read_parquet, mock_read_index):
     assert result.max_score == 0.0
     assert result.skewness == 0.0
     assert math.isnan(result.semantic_dispersion)
+    assert math.isnan(result.entropy)
+    assert math.isnan(result.top1_top2_gap)

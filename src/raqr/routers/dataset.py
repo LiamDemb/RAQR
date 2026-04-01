@@ -145,5 +145,13 @@ class RouterDataset(Dataset):
         if not keys:
             return None
         return np.array(
-            [[r[k] for k in keys] for r in rows], dtype=np.float32
+            [[_float_scalar(r, k) for k in keys] for r in rows], dtype=np.float32
         )
+
+
+def _float_scalar(row: dict, key: str) -> float:
+    """JSON null / missing probe values become NaN for StandardScaler."""
+    v = row.get(key)
+    if v is None:
+        return float("nan")
+    return float(v)

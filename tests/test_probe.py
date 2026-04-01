@@ -76,3 +76,6 @@ def test_run_probe_returns_probe_signals(tmp_path):
     assert signals.max_score >= signals.min_score
     assert np.isfinite(signals.skewness)
     assert np.isfinite(signals.semantic_dispersion)
+    assert np.isfinite(signals.entropy)
+    assert np.isfinite(signals.gini_softmax)
+    assert np.isfinite(signals.mass_k_80)

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 Q_EMB_DIM = 384
 Q_FEAT_DIM = 4
-PROBE_DIM = 3
+PROBE_DIM = 10
 
 Q_FEAT_KEYS = [
     "entity_count",
@@ -19,6 +19,13 @@ PROBE_KEYS = [
     "probe_max_score",
     "probe_skewness",
     "probe_semantic_dispersion",
+    "probe_entropy",
+    "probe_gini",
+    "probe_mass_k_80",
+    "probe_mass_k_90",
+    "probe_mass_k_95",
+    "probe_top1_top2_gap",
+    "probe_top1_top2_ratio",
 ]
 
 LABEL_MAP = {"Dense": 0, "Graph": 1}
